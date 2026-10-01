@@ -1,0 +1,117 @@
+{
+  "dataset": "Boss of the SOC v1 (BOTSv1)",
+  "publisher": "Splunk Inc.",
+  "license": "CC0-1.0",
+  "homepage": "https://github.com/splunk/botsv1",
+  "window_utc": [
+    "2016-08-24T16:00:00+00:00",
+    "2016-08-24T18:30:00+00:00"
+  ],
+  "window_note": "10:00-12:30 US Mountain time on 24 Aug 2016, bracketing the Cerber ransomware execution on we8105desk and the benign Nessus scan and Acronis backup activity around it.",
+  "sources": {
+    "sysmon": {
+      "file": "botsv1.XmlWinEventLog-Microsoft-Windows-Sysmon-Operational.json.gz",
+      "url": "https://s3.amazonaws.com/botsdataset/botsv1/json-by-sourcetype/botsv1.XmlWinEventLog-Microsoft-Windows-Sysmon-Operational.json.gz",
+      "sha256": "6bccc720bbd7491e57b62a74a280cda274ce9e82c846b9891feb775be8a92c5b",
+      "bytes": 145011879
+    },
+    "dns": {
+      "file": "botsv1.stream-dns.json.gz",
+      "url": "https://s3.amazonaws.com/botsdataset/botsv1/json-by-sourcetype/botsv1.stream-dns.json.gz",
+      "sha256": "e1240eb5cc1b26bf07a7c4ae66b0050f562a57c400bda9d1b9e60515a95b1d8a",
+      "bytes": 221203519
+    },
+    "security": {
+      "file": "botsv1.security-logons.jsonl.gz",
+      "derived_from": "https://s3.amazonaws.com/botsdataset/botsv1/json-by-sourcetype/botsv1.WinEventLog-Security.json.gz",
+      "derivation": "Stream-filtered with backend/scripts/filter_bots_security.py: event IDs 4624, 4625, 4648, 4672, 5140, 7045 only, fields trimmed. The 3.8 GB source was never stored in full.",
+      "sha256_of_extract": "c8528219d153525c4fd22d203f268869f792de59fc9ae516cbda7a196bf7cd7c",
+      "bytes": 33480158
+    }
+  },
+  "selection": {
+    "sysmon": {
+      "kept_event_codes": [
+        "1",
+        "10",
+        "11"
+      ],
+      "kept_records": 374,
+      "dropped_in_window_by_event_code": {
+        "2": 1180,
+        "3": 58675,
+        "5": 323,
+        "6": 10,
+        "7": 107765
+      },
+      "dropped_reason": "PRISM's Sysmon parser models event IDs 1, 10 and 11 only.",
+      "fields_retained": [
+        "_time",
+        "sourcetype",
+        "host",
+        "Computer",
+        "EventCode",
+        "RecordID",
+        "UtcTime",
+        "User",
+        "Image",
+        "ParentImage",
+        "CommandLine",
+        "ParentCommandLine",
+        "ProcessGuid",
+        "ProcessId",
+        "CurrentDirectory",
+        "Hashes",
+        "IntegrityLevel",
+        "TargetFilename",
+        "TargetImage",
+        "SourceImage",
+        "GrantedAccess"
+      ]
+    },
+    "dns": {
+      "kept_records": 6189,
+      "dropped_response_only_records_in_window": 4900,
+      "dropped_reason": "Response-only stream records carry no query field.",
+      "fields_retained": [
+        "_time",
+        "sourcetype",
+        "timestamp",
+        "src_ip",
+        "dest_ip",
+        "src_port",
+        "transaction_id",
+        "query{}",
+        "query_type{}",
+        "reply_code{}",
+        "message_type{}",
+        "answer"
+      ]
+    },
+    "security": {
+      "kept_records": 13109,
+      "kept_by_event_code": {
+        "4624": 5035,
+        "4648": 4,
+        "4672": 4826,
+        "5140": 3244
+      }
+    }
+  },
+  "inventory": {
+    "hosts": 1592,
+    "users": 175,
+    "known_domains": 55,
+    "assumptions": [
+      "Host criticality is assigned by role, not taken from BOTS.",
+      "Accounts containing 'admin' are treated as privileged.",
+      "Entitlement means the account was seen logging on or running processes before the window, not an ACL."
+    ]
+  },
+  "totals": {
+    "security": 13109,
+    "sysmon": 374,
+    "dns": 6189,
+    "all": 19672
+  }
+}

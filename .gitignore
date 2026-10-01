@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+*.log
+
+# Environment and local data
+.env
+*.local
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# BOTSv1 downloads (large; re-fetch with backend/scripts/fetch_botsv1.py)
+backend/data/botsv1/raw/
+
+# Local editor/agent settings
+.claude/

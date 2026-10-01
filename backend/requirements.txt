@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dateutil==2.9.0.post0
+networkx==3.4.2
+python-multipart==0.0.20
+# Only needed by the optional LLM narrator; the agents run without it.
+httpx==0.28.1

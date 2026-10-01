@@ -1,0 +1,91 @@
+{
+  "hosts": [
+    {
+      "name": "HR-PC", "ip": "10.0.1.15", "role": "workstation", "criticality": 0.3,
+      "is_critical_infrastructure": false, "os": "Windows 11", "zone": "corp-user",
+      "owner": "john.doe",
+      "reachable_hosts": ["FINANCE-PC", "FILE01", "DC01", "IT-PC", "MKTG-PC"]
+    },
+    {
+      "name": "FINANCE-PC", "ip": "10.0.2.20", "role": "workstation", "criticality": 0.5,
+      "is_critical_infrastructure": false, "os": "Windows 11", "zone": "corp-finance",
+      "owner": "maria.gomez",
+      "reachable_hosts": ["FILE01", "DC01", "BACKUP01", "HR-PC"]
+    },
+    {
+      "name": "FILE01", "ip": "10.0.2.30", "role": "file server", "criticality": 0.7,
+      "is_critical_infrastructure": false, "os": "Windows Server 2022", "zone": "corp-srv",
+      "reachable_hosts": ["DC01", "BACKUP01"]
+    },
+    {
+      "name": "DC01", "ip": "10.0.0.10", "role": "domain controller", "criticality": 1.0,
+      "is_critical_infrastructure": true, "os": "Windows Server 2022", "zone": "corp-core",
+      "reachable_hosts": ["FILE01", "BACKUP01", "DNS01", "FINANCE-PC", "HR-PC", "IT-PC", "MKTG-PC"]
+    },
+    {
+      "name": "BACKUP01", "ip": "10.0.0.40", "role": "backup server", "criticality": 0.8,
+      "is_critical_infrastructure": true, "os": "Windows Server 2022", "zone": "corp-core",
+      "reachable_hosts": ["FILE01", "DC01"]
+    },
+    {
+      "name": "IT-PC", "ip": "10.0.1.22", "role": "workstation", "criticality": 0.4,
+      "is_critical_infrastructure": false, "os": "Windows 11", "zone": "corp-user",
+      "owner": "priya.n",
+      "reachable_hosts": ["DC01", "FILE01", "HR-PC", "FINANCE-PC"]
+    },
+    {
+      "name": "MKTG-PC", "ip": "10.0.1.31", "role": "workstation", "criticality": 0.2,
+      "is_critical_infrastructure": false, "os": "Windows 11", "zone": "corp-user",
+      "owner": "sara.lee",
+      "reachable_hosts": ["FILE01", "DC01"]
+    },
+    {
+      "name": "DNS01", "ip": "10.0.0.53", "role": "dns resolver", "criticality": 0.6,
+      "is_critical_infrastructure": false, "os": "Windows Server 2022", "zone": "corp-core",
+      "reachable_hosts": ["DC01"]
+    }
+  ],
+  "users": [
+    {
+      "name": "john.doe", "display_name": "John Doe", "department": "HR",
+      "privilege": 0.55, "is_privileged": false,
+      "groups": ["Domain Users", "HR-Staff", "Server Operators"],
+      "accessible_hosts": ["HR-PC", "FINANCE-PC", "FILE01", "DC01", "IT-PC"]
+    },
+    {
+      "name": "maria.gomez", "display_name": "Maria Gomez", "department": "Finance",
+      "privilege": 0.3, "is_privileged": false,
+      "groups": ["Domain Users", "Finance-Staff"],
+      "accessible_hosts": ["FINANCE-PC", "FILE01"]
+    },
+    {
+      "name": "sara.lee", "display_name": "Sara Lee", "department": "Marketing",
+      "privilege": 0.2, "is_privileged": false,
+      "groups": ["Domain Users", "Marketing"],
+      "accessible_hosts": ["MKTG-PC", "FILE01"]
+    },
+    {
+      "name": "priya.n", "display_name": "Priya Nair", "department": "IT",
+      "privilege": 0.7, "is_privileged": true,
+      "groups": ["Domain Users", "Helpdesk-Admins"],
+      "accessible_hosts": ["IT-PC", "HR-PC", "MKTG-PC", "FINANCE-PC", "FILE01"]
+    },
+    {
+      "name": "admin.k", "display_name": "Karan Admin", "department": "IT",
+      "privilege": 1.0, "is_privileged": true,
+      "groups": ["Domain Admins", "Enterprise Admins"],
+      "accessible_hosts": ["DC01", "FILE01", "BACKUP01", "DNS01", "IT-PC"]
+    },
+    {
+      "name": "svc-backup", "display_name": "Backup Service Account", "department": "IT",
+      "privilege": 0.8, "is_privileged": true,
+      "groups": ["Backup Operators"],
+      "accessible_hosts": ["BACKUP01", "FILE01", "DC01"]
+    }
+  ],
+  "known_domains": [
+    "microsoft.com", "windowsupdate.com", "office.com", "office365.com",
+    "sharepoint.com", "google.com", "gstatic.com", "slack.com", "github.com",
+    "corp.local", "dc01.corp.local", "adobe.com", "zoom.us", "atlassian.net"
+  ]
+}

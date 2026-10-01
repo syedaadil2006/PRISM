@@ -1,0 +1,57 @@
+# PRISM, end to end.
+#
+#   docker compose up --build
+#   open http://localhost:5173
+#
+# Neo4j is optional and off by default; PRISM analyses on NetworkX either
+# way. Start it with:  docker compose --profile neo4j up --build
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      PRISM_LOG_LEVEL: INFO
+      PRISM_DEMO_MODE: "true"
+      PRISM_SIMULATION_AUTOSTART: "false"
+      # Point at the neo4j service below when running the neo4j profile.
+      PRISM_NEO4J_ENABLED: "false"
+      PRISM_NEO4J_URI: bolt://neo4j:7687
+      PRISM_NEO4J_USER: neo4j
+      PRISM_NEO4J_PASSWORD: ${PRISM_NEO4J_PASSWORD:-prism}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  neo4j:
+    image: neo4j:5.26-community
+    profiles: ["neo4j"]
+    environment:
+      NEO4J_AUTH: neo4j/${PRISM_NEO4J_PASSWORD:-prism}
+      NEO4J_server_memory_heap_max__size: 1G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+
+volumes:
+  neo4j-data:
