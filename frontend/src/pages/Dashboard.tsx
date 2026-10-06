@@ -39,10 +39,16 @@ export function Dashboard() {
   const [focusChain, setFocusChain] = useState(false);
   const [simulation, setSimulation] = useState<SimulationStatus | null>(null);
   // Plain-language view by default; the full analyst console is one click away.
-  const [simple, setSimple] = useState(true);
+  // ?view=analyst opens straight into the analyst console (handy for demos).
+  const [simple, setSimple] = useState(
+    () => new URLSearchParams(window.location.search).get("view") !== "analyst",
+  );
   const [agentCollapsed, setAgentCollapsed] = useState(false);
   const [statKey, setStatKey] = useState<StatKey | null>(null);
-  const [graphMode, setGraphMode] = useState<"map" | "detailed">("map");
+  // ?graph=detailed opens the analyst graph instead of the simple map.
+  const [graphMode, setGraphMode] = useState<"map" | "detailed">(() =>
+    new URLSearchParams(window.location.search).get("graph") === "detailed" ? "detailed" : "map",
+  );
   // Story playback on the graph: null shows everything.
   const [storyStep, setStoryStep] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);

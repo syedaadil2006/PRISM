@@ -25,3 +25,6 @@ backend/data/botsv1/raw/
 
 # Local editor/agent settings
 .claude/
+
+# Portable Node.js downloaded by the launcher
+.tools/

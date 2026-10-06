@@ -195,6 +195,13 @@ immediately, but it is not connected to a live network feed.
 
 HOW TO RUN
 ----------
+Easiest (Windows): double-click "Start PRISM.bat". It checks the computer
+(Windows version, memory, disk space) and what PRISM needs (Python, Node.js,
+packages). If something is missing it lists what it will install and asks
+for your permission first (answer Y or N). No admin rights are needed.
+Later launches take a few seconds.
+
+Manual steps:
   python -m venv .venv
   .venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
   npm --prefix frontend install
