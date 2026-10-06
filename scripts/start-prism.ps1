@@ -27,6 +27,7 @@ Set-Location $Root
 
 $PythonVersion = '3.12.10'
 $MinPython = [version]'3.11'
+$MaxPython = [version]'3.15'   # first version NOT yet supported (packages must have ready-made wheels)
 $MinNode = [version]'18.0'
 $MinRamGB = 4
 $MinFreeGB = 2
@@ -59,11 +60,17 @@ function Test-PrismHealth {
 
 function Open-Browser { if (-not $env:PRISM_NO_BROWSER) { Start-Process "http://localhost:$Port" } }
 
-# Returns @{ Exe; Args; Version } for a working Python 3.11+, or $null.
+function Test-PythonVersion($version) { return ($version -ge $MinPython -and $version -lt $MaxPython) }
+
+# Returns @{ Exe; Args; Version } for a working, supported Python, or $null.
+# Prefers 3.12, then the other supported versions. A newer Python that PRISM's
+# packages do not support yet is skipped (it would need a C++/Rust compiler).
 # The Microsoft Store "python.exe" placeholder prints nothing, so it is skipped.
 function Find-Python {
     $candidates = @()
-    if (Get-Command py -ErrorAction SilentlyContinue) { $candidates += , @('py', @('-3.12')); $candidates += , @('py', @('-3')) }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        foreach ($v in '-3.12', '-3.13', '-3.11', '-3.14') { $candidates += , @('py', @($v)) }
+    }
     if (Get-Command python -ErrorAction SilentlyContinue) { $candidates += , @('python', @()) }
     $installed = @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe" -ErrorAction SilentlyContinue) +
                  @(Get-ChildItem "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue)
@@ -73,7 +80,7 @@ function Find-Python {
             $out = & $candidate[0] @($candidate[1]) -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null
             if ($LASTEXITCODE -eq 0 -and $out) {
                 $version = [version](($out | Select-Object -Last 1).Trim())
-                if ($version -ge $MinPython) { return @{ Exe = $candidate[0]; Args = $candidate[1]; Version = $version } }
+                if (Test-PythonVersion $version) { return @{ Exe = $candidate[0]; Args = $candidate[1]; Version = $version } }
             }
         } catch { }
     }
@@ -180,10 +187,12 @@ Title 'Step 2 of 3: checking what PRISM needs'
 $plan = New-Object System.Collections.ArrayList
 
 $python = Find-Python
-if ($python) { Row 'Python 3.11+' "Python $($python.Version)" 'OK' }
+if ($python) { Row 'Python 3.11 - 3.14' "Python $($python.Version)" 'OK' }
 else {
-    Row 'Python 3.11+' 'not found' 'NEED'
-    [void]$plan.Add(@{ Key = 'python'; Download = $true; Text = 'Python 3.12 (about 25 MB) from winget or python.org, installed for your user account only' })
+    $other = $null
+    try { $other = (& python -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null | Select-Object -Last 1) } catch { }
+    if ($other) { Row 'Python 3.11 - 3.14' "only Python $other (not supported yet)" 'NEED' } else { Row 'Python 3.11 - 3.14' 'not found' 'NEED' }
+    [void]$plan.Add(@{ Key = 'python'; Download = $true; Text = 'Python 3.12 (about 25 MB) from winget or python.org, installed for your user account only, alongside any other Python' })
 }
 
 $nodeVersion = Get-NodeVersion
@@ -195,7 +204,12 @@ else {
 
 $venvPython = Join-Path $Root '.venv\Scripts\python.exe'
 $venvWorks = $false
-if (Test-Path $venvPython) { try { & $venvPython -c "import sys" 2>$null; $venvWorks = ($LASTEXITCODE -eq 0) } catch { } }
+if (Test-Path $venvPython) {
+    try {
+        $venvVersion = & $venvPython -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null
+        $venvWorks = ($LASTEXITCODE -eq 0) -and $venvVersion -and (Test-PythonVersion ([version](($venvVersion | Select-Object -Last 1).Trim())))
+    } catch { $venvWorks = $false }
+}
 $requirements = Join-Path $Root 'backend\requirements.txt'
 $reqStamp = Join-Path $Root '.venv\prism-requirements.sha256'
 $reqHash = Get-FileHashText $requirements
@@ -285,8 +299,9 @@ if ($plan.Count -gt 0) {
                     & $python.Exe @($python.Args) -m venv (Join-Path $Root '.venv')
                     if ($LASTEXITCODE -ne 0) { throw 'Could not create the Python environment.' }
                 }
-                & $venvPython -m pip install --disable-pip-version-check -q -r $requirements
-                if ($LASTEXITCODE -ne 0) { throw 'Installing the backend packages failed. Check the internet connection and try again.' }
+                # Ready-made packages only: never try to compile (that needs C++/Rust build tools).
+                & $venvPython -m pip install --disable-pip-version-check -q --only-binary=:all: -r $requirements
+                if ($LASTEXITCODE -ne 0) { throw 'Installing the backend packages failed (see the message above). Check the internet connection; if the message mentions a missing wheel or building a wheel, install Python 3.12 from https://www.python.org/downloads/ and run PRISM again.' }
                 Set-Content -Path $reqStamp -Value $reqHash -Encoding ascii
                 Info 'Backend packages are ready.'
             }

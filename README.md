@@ -51,14 +51,14 @@ Double-click **`Start PRISM.bat`**. The launcher (`scripts/start-prism.ps1`) run
 
 1. **Checks this computer**: Windows 10 or newer (64-bit), processor, memory (4 GB minimum), free disk space
    (2 GB minimum) and whether port 8000 is free.
-2. **Checks what PRISM needs**: Python 3.11+, Node.js 18+, the backend packages, the dashboard packages and
+2. **Checks what PRISM needs**: Python 3.11 to 3.14, Node.js 18+, the backend packages, the dashboard packages and
    the dashboard build.
 3. **Asks before installing anything.** If something is missing it lists exactly what it will download, from
    where and where it will go, and waits for you to answer **Y**. Answering **N** installs nothing.
 
 | Missing | What the launcher installs (with your permission) |
 |---|---|
-| Python 3.11+ | Python 3.12 for your user account, via winget or the official python.org installer |
+| Python 3.11 to 3.14 | Python 3.12 for your user account (alongside any other Python), via winget or python.org. A newer Python that the packages do not support yet is skipped rather than compiled from source |
 | Node.js 18+ | A portable Node.js LTS from nodejs.org, unpacked into `.tools/node` |
 | Backend packages | Creates `.venv` and installs `backend/requirements.txt` from pypi.org |
 | Dashboard packages and build | `npm ci` from npmjs.org, then `npm run build` |
@@ -71,7 +71,7 @@ rebuilt. PRISM then runs on http://localhost:8000 in a minimised window; close t
 
 ### Manual setup
 
-Requires Python 3.11+ and Node 18+.
+Requires Python 3.11 to 3.14 and Node 18+.
 
 ```bash
 python -m venv .venv
