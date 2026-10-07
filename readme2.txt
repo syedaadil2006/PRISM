@@ -204,6 +204,8 @@ Easiest (Windows): double-click "Start PRISM.bat". It checks the computer
 packages). If something is missing it lists what it will install and asks
 for your permission first (answer Y or N). No admin rights are needed.
 Later launches take a few seconds.
+It then asks which data to show: 1 = real-time data from this computer,
+2 = the real Splunk BOTS v1 attack recording, 3 = the demo scenario.
 After starting, it asks whether PRISM may read this computer's Windows
 event logs in real time. Answer N to skip. Logon events need administrator
 approval, which Windows asks for separately.

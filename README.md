@@ -125,7 +125,10 @@ Double-click **`Start PRISM.bat`**. The launcher (`scripts/start-prism.ps1`) run
    the dashboard build.
 3. **Asks before installing anything.** If something is missing it lists exactly what it will download, from
    where and where it will go, and waits for you to answer **Y**. Answering **N** installs nothing.
-4. **Asks before collecting real-time data.** After PRISM starts, it asks whether it may read this
+4. **Asks which data to analyse:** **1** real-time data from this computer (its own Windows event logs:
+   the last 24 hours, then new events live), **2** real recorded attack data (Splunk BOTS v1, 19,672 events,
+   about 1–2 minutes and ~4 GB of memory), or **3** the demo scenario. Enter picks 1.
+5. **Asks before collecting real-time data.** After PRISM starts, it asks whether it may read this
    computer's own Windows event logs as they happen (see [Real-time feed](#real-time-feed)). On **Y** it
    starts the read-only collector in a minimised window; logon and Sysmon events additionally need
    Windows' administrator approval (UAC), which you can refuse. On **N** nothing is collected.

@@ -7,7 +7,9 @@
 # 3. If anything is missing, lists exactly what will be downloaded, from
 #    where, and where it will go, then ASKS before installing anything.
 # 4. Starts PRISM on http://localhost:8000 and opens the browser.
-# 5. ASKS whether PRISM may collect real-time events from this computer's
+# 5. Asks which data to analyse: real-time data from this computer, the real
+#    Splunk BOTS v1 attack recording, or the demo scenario.
+# 6. ASKS whether PRISM may collect real-time events from this computer's
 #    Windows event logs. Only on "yes" does it start the read-only collector;
 #    the logon and Sysmon logs additionally need Windows' own administrator
 #    approval (UAC), which the user can refuse.
@@ -22,6 +24,7 @@
 #   PRISM_NO_BROWSER  set to 1 to skip opening the browser
 #   PRISM_ASSUME_YES  set to 1 to answer "yes" to the install question
 #   PRISM_COLLECT     no | yes | admin  answers the real-time collection question
+#   PRISM_SOURCE      1 | 2 | 3 (live | bots | demo)  answers the data question
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -71,7 +74,7 @@ function Get-CollectorProcess {
 }
 
 # Asks before collecting anything. Nothing is collected on "no" or Enter.
-function Request-LiveCollection {
+function Request-LiveCollection([int]$LookBackMinutes = 0, [string]$Without = 'the chosen dataset only') {
     if (Get-CollectorProcess) { Info 'The real-time Windows collector is already running.'; return }
     Write-Host ''
     Write-Host 'Real-time data from this computer' -ForegroundColor Cyan
@@ -81,10 +84,11 @@ function Request-LiveCollection {
     Info 'Sysmon is installed). The collector only READS the event logs and sends'
     Info "them to PRISM on this computer (http://localhost:$Port). Nothing leaves the"
     Info 'computer and nothing is changed. Close its window at any time to stop it.'
+    if ($LookBackMinutes -gt 0) { Info "It starts with the last $([int]($LookBackMinutes / 60)) hours of events, then adds new ones as they happen." }
     Write-Host ''
     if ($env:PRISM_COLLECT) { $answer = $env:PRISM_COLLECT; Info "Collect real-time events? [Y/N]: $answer (PRISM_COLLECT)" }
     else { $answer = Read-Host '  Allow PRISM to collect real-time events from this computer? [Y/N]' }
-    if ($answer -notmatch '^\s*(y|yes|admin)\s*$') { Info 'OK, no real-time collection. PRISM shows the demo dataset only.'; return }
+    if ($answer -notmatch '^\s*(y|yes|admin)\s*$') { Info "OK, no real-time collection. PRISM shows $Without."; return }
 
     $elevate = $answer -match 'admin'
     if (-not $elevate -and -not $env:PRISM_COLLECT) {
@@ -96,7 +100,7 @@ function Request-LiveCollection {
     }
 
     $collector = Join-Path $Root 'scripts\live_windows_collector.ps1'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -Server http://127.0.0.1:$Port"
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -Server http://127.0.0.1:$Port -LookBackMinutes $LookBackMinutes"
     if ($elevate) {
         try {
             Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Minimized
@@ -109,6 +113,36 @@ function Request-LiveCollection {
     Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Minimized
     Info 'Real-time collection started (System log; logon and Sysmon events need administrator rights).'
     Info 'The top bar of the dashboard shows LIVE FEED while events arrive.'
+}
+
+# Which data PRISM analyses. Returns @{ Dataset; Label; LookBack; Without }.
+function Select-DataSource {
+    Write-Host ''
+    Write-Host 'Which data should PRISM analyse?' -ForegroundColor Cyan
+    Write-Host '--------------------------------' -ForegroundColor DarkCyan
+    Info '1. Real-time data from THIS computer'
+    Info '   Its own Windows event logs: the last 24 hours, then new events as they happen.'
+    Info '   (A normal computer usually shows "all clear": no attack is expected.)'
+    Info '2. Real recorded attack data: Splunk "Boss of the SOC" v1'
+    Info '   19,672 real events from a ransomware investigation (public, CC0).'
+    Info '   Takes about 1-2 minutes to analyse and needs about 4 GB of memory.'
+    Info '3. Demo scenario'
+    Info '   The made-up HR-PC -> FINANCE-PC attack used in the presentation.'
+    Write-Host ''
+    if ($env:PRISM_SOURCE) { $choice = $env:PRISM_SOURCE; Info "Choose 1, 2 or 3 [1]: $choice (PRISM_SOURCE)" }
+    else { $choice = Read-Host '  Choose 1, 2 or 3 [1]' }
+    switch -regex ($choice.Trim().ToLower()) {
+        '^(2|bots|botsv1)$' {
+            if ($script:ramGB -lt 6) { Info "Warning: this computer has $($script:ramGB) GB of memory; the BOTS data needs about 4 GB." }
+            return @{ Dataset = 'botsv1'; Label = 'real recorded attack data (Splunk BOTS v1)'; LookBack = 0; Without = 'the BOTS v1 data only' }
+        }
+        '^(3|demo|synthetic)$' {
+            return @{ Dataset = 'synthetic'; Label = 'the demo scenario'; LookBack = 0; Without = 'the demo scenario only' }
+        }
+        default {
+            return @{ Dataset = 'live'; Label = 'real-time data from this computer'; LookBack = 1440; Without = 'nothing until real-time events arrive' }
+        }
+    }
 }
 
 function Test-PythonVersion($version) { return ($version -ge $MinPython -and $version -lt $MaxPython) }
@@ -198,6 +232,7 @@ Update-SessionPath
 
 if (Test-PrismHealth) {
     Info "PRISM is already running on http://localhost:$Port"
+    Info 'To switch data (real-time, BOTS or demo), close the minimised "PRISM server" window and start again.'
     Request-LiveCollection
     Open-Browser
     exit 0
@@ -381,18 +416,21 @@ if ($plan.Count -gt 0) {
 }
 
 # --- Start PRISM --------------------------------------------------------------
+$source = Select-DataSource
 Write-Host ''
-Info 'Starting PRISM...'
-$serverCommand = "title PRISM server - close this window to stop PRISM & `"$venvPython`" -m uvicorn app.main:app --app-dir backend --port $Port"
+Info "Starting PRISM with $($source.Label)..."
+if ($source.Dataset -eq 'botsv1') { Info 'Analysing 19,672 real events; this takes about 1-2 minutes.' }
+$serverCommand = "set PRISM_DATASET=$($source.Dataset)& title PRISM server - close this window to stop PRISM & `"$venvPython`" -m uvicorn app.main:app --app-dir backend --port $Port"
 Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', $serverCommand -WorkingDirectory $Root -WindowStyle Minimized
 
-$deadline = (Get-Date).AddSeconds(90)
+$waitSeconds = if ($source.Dataset -eq 'botsv1') { 300 } else { 90 }
+$deadline = (Get-Date).AddSeconds($waitSeconds)
 while (-not (Test-PrismHealth)) {
-    if ((Get-Date) -gt $deadline) { throw 'PRISM did not start within 90 seconds. Open the minimised "PRISM server" window to see the error.' }
+    if ((Get-Date) -gt $deadline) { throw "PRISM did not start within $waitSeconds seconds. Open the minimised `"PRISM server`" window to see the error." }
     Start-Sleep -Seconds 1
 }
 Write-Host "  PRISM is running on http://localhost:$Port" -ForegroundColor Green
 Info 'To stop PRISM, close the minimised "PRISM server" window.'
-Request-LiveCollection
+Request-LiveCollection -LookBackMinutes $source.LookBack -Without $source.Without
 Open-Browser
 exit 0

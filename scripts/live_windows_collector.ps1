@@ -96,10 +96,14 @@ function Convert-Sysmon($event) {
 
 function Send-Records($records, $stream) {
     if ($records.Count -eq 0) { return }
-    $body = ($records | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
     $uri = "${endpoint}?source=$stream"
-    $result = Invoke-RestMethod -Method Post -Uri $uri -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/x-ndjson'
-    Write-Host ("  {0:HH:mm:ss}  {1,-28} sent {2,4}   accepted {3,4}" -f (Get-Date), $stream, $records.Count, $result.accepted)
+    # Sent in chunks: the first poll can carry hours of history.
+    for ($i = 0; $i -lt $records.Count; $i += 1000) {
+        $chunk = @($records[$i..([Math]::Min($i + 999, $records.Count - 1))])
+        $body = ($chunk | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
+        $result = Invoke-RestMethod -Method Post -Uri $uri -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/x-ndjson'
+        Write-Host ("  {0:HH:mm:ss}  {1,-28} sent {2,4}   accepted {3,4}" -f (Get-Date), $stream, $chunk.Count, $result.accepted)
+    }
 }
 
 Write-Host ''
