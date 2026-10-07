@@ -43,6 +43,76 @@ introduces a host or technique that was not in the verified set.
 
 ---
 
+## System architecture
+
+```mermaid
+flowchart TB
+    subgraph SRC["Log sources"]
+        S1["Windows Security<br/>logons, failed logons, shares"]
+        S2["Sysmon<br/>processes, file writes, DNS"]
+        S3["Zeek DNS"]
+        S4["Splunk BOTS v1 export"]
+    end
+
+    subgraph IN["Ways in"]
+        I1["Bundled dataset / file upload<br/>POST /api/logs/ingest"]
+        I2["Live push API<br/>POST /api/live/events"]
+        I3["Watched folder<br/>backend/data/live"]
+        I4["Windows collector<br/>asks permission first"]
+    end
+
+    subgraph CORE["PRISM backend: FastAPI + Python"]
+        C1["Parse and normalize<br/>one event schema"]
+        C2["Enrich<br/>beaconing, credential guessing"]
+        C3["Entity graph<br/>NetworkX"]
+        C4["Correlation engine<br/>weighted factors, score >= 0.70"]
+        C5["Attack chains<br/>connected components"]
+        C6["Lateral movement<br/>clause-by-clause rule"]
+        C7["MITRE ATT&CK mapping<br/>19 named rules"]
+        C8["Next-target prediction<br/>6 factors, 0-100, PREDICTED"]
+        C1 --> C2 --> C3 --> C4 --> C5
+        C5 --> C6
+        C5 --> C7
+        C5 --> C8
+    end
+
+    subgraph AG["Investigation agents: 17 tools, evidence required"]
+        A1["Triage, Correlation, Investigation, Evidence,<br/>Graph, MITRE, Chain, Next-Target"]
+        A2["Verification agent<br/>re-checks and downgrades"]
+        A3["Analyst decision<br/>approve, reject, false positive"]
+        A1 --> A2 --> A3
+    end
+
+    subgraph UI["Dashboard: React + Cytoscape.js"]
+        U1["Simple view<br/>plain-English story"]
+        U2["Analyst view<br/>attack graph, timeline, MITRE"]
+        U3["Reports<br/>HTML / PDF / Markdown"]
+    end
+
+    S1 & S2 & S3 & S4 --> IN
+    I1 & I2 & I3 & I4 --> C1
+    C6 & C7 & C8 --> API["REST API /api<br/>OpenAPI docs at /docs"]
+    C5 --> A1
+    A3 --> API
+    API --> U1 & U2 & U3
+
+    LLM["Optional LLM<br/>rewords verified findings only"] -.-> A2
+    NEO["Optional Neo4j mirror"] -.- C3
+```
+
+| Layer | What it does |
+|---|---|
+| **Ways in** | Logs arrive from the bundled dataset, file upload, the live push API, the watched folder, or the Windows collector (which only starts after the user agrees). |
+| **Normalize and enrich** | Every source becomes one event schema; cross-event findings (DNS beaconing, clusters of failed logons) are added. |
+| **Detection engine** | Rule-based and explainable: weighted correlation, chains as connected components, a clause-by-clause lateral-movement rule, 19 MITRE mapping rules, six-factor next-target scoring. No trained ML model. |
+| **Investigation agents** | Nine deterministic agents work only through 17 tools; no finding without evidence; the Verification agent re-checks everything and the analyst has the final say. |
+| **API and dashboard** | FastAPI serves the results and the built dashboard from one process on port 8000. The React dashboard has a Simple view for anyone and an Analyst view for experts. |
+
+Full detail: **[docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)** (algorithms, APIs, data flow, design decisions,
+security, AI components) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
 ## Quick start
 
 ### One click (Windows)
