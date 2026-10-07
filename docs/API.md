@@ -376,3 +376,17 @@ over the findings that survive.
 
 ### `POST /api/agents/investigations/{id}/cancel`
 Stop an investigation that is still running.
+
+## Live feed
+
+Real-time ingestion. See "Real-time feed" in the README.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/live/events?source=<name>&format=<fmt>` | Push records as they happen: one JSON object, a JSON array, `{"records": [...]}`, JSON-lines, or CSV (`Content-Type: text/csv`). `format` is optional (`windows_security`, `sysmon`, `zeek_dns`, `prism`, `botsv1`). At most 5,000 records per request (413 above that). Returns `received`, `accepted`, `duplicates`, `rejected`, `errors`, `total_events`. |
+| `GET` | `/api/live/status` | Events received per source, events per minute, whether events arrived in the last 30 s, and whether the analysis has caught up |
+| `POST` | `/api/live/start?clear=true` | Switch to live analysis; with `clear=true` the bundled dataset is dropped (`POST /api/logs/reset` restores it) |
+| `POST` | `/api/live/flush` | Re-run the analysis now instead of waiting for the background loop (about 1 s) |
+
+Event ids are prefixed with the source name (`edr-laptop:edr-0001`), so different senders never
+collide, and a resent record is counted once.

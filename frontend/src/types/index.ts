@@ -279,6 +279,33 @@ export interface SimulationStatus {
   gating: boolean;
 }
 
+export interface LiveStreamView {
+  name: string;
+  events: number;
+  rejected: number;
+  last_event_at: string | null;
+  last_received_at: string | null;
+}
+
+/** Real-time feed status (GET /api/live/status). */
+export interface LiveStatus {
+  enabled: boolean;
+  receiving: boolean;
+  live_only: boolean;
+  watch_dir: string | null;
+  received: number;
+  accepted: number;
+  rejected: number;
+  duplicates: number;
+  events_per_minute: number;
+  last_received_at: string | null;
+  pending_analysis: boolean;
+  last_analysis_at: string | null;
+  last_analysis_ms: number | null;
+  streams: LiveStreamView[];
+  recent_errors: string[];
+}
+
 export interface EngineConfig {
   correlation_window_seconds: number;
   correlation_min_score: number;

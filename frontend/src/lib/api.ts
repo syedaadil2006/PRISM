@@ -23,6 +23,7 @@ import type {
   Health,
   HostView,
   IngestSummary,
+  LiveStatus,
   NormalizedEvent,
   SimulationStatus,
   TacticView,
@@ -101,6 +102,7 @@ export const api = {
   predictions: () => request<TargetPrediction[]>("/predictions"),
 
   simulation: () => request<SimulationStatus>("/simulation"),
+  live: () => request<LiveStatus>("/live/status"),
   simulationStart: () => request<SimulationStatus>("/simulation/start", { method: "POST" }),
   simulationPause: () => request<SimulationStatus>("/simulation/pause", { method: "POST" }),
   simulationResume: () => request<SimulationStatus>("/simulation/resume", { method: "POST" }),

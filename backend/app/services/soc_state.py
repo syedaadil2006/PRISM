@@ -8,6 +8,7 @@ never show a graph that disagrees with the chain list.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -23,10 +24,12 @@ from app.graph.builder import build_entity_graph
 from app.graph.neo4j_store import Neo4jGraphStore, Neo4jUnavailable
 from app.graph.presenter import build_presentation_graph
 from app.ingest.loader import ingest_directory, ingest_payload, load_inventory, normalize_all
+from app.ingest.parsers import LogRecord
 from app.models.analysis import AttackChain, Correlation, DashboardStats
 from app.models.events import IngestSummary, NormalizedEvent
 from app.models.graph import GraphPayload
 from app.models.inventory import Inventory
+from app.services.live_feed import LiveFeed, LiveIngestResult, LiveStatus
 
 logger = get_logger(__name__)
 
@@ -79,6 +82,12 @@ class SocState:
         self._lock = asyncio.Lock()
         self._neo4j = Neo4jGraphStore(settings.neo4j)
 
+        self.live = LiveFeed(settings.live, live_only=settings.dataset == "live")
+        self._live_task: asyncio.Task[None] | None = None
+        self._dirty = False
+        self._last_analysis_at: datetime | None = None
+        self._last_analysis_ms: float | None = None
+
     # ----------------------------------------------------------------- setup --
 
     def bootstrap(self) -> None:
@@ -93,7 +102,7 @@ class SocState:
                     "neo4j unavailable, continuing on networkx", extra={"error": str(exc)}
                 )
 
-        if self.settings.demo_mode:
+        if self.settings.demo_mode and self.settings.demo_dir is not None and not self.live.live_only:
             events, errors = ingest_directory(Path(self.settings.demo_dir), self.inventory)
             self._all_events = normalize_all(events)
             self.ingest_errors = errors
@@ -110,6 +119,8 @@ class SocState:
     def shutdown(self) -> None:
         if self._sim_task is not None and not self._sim_task.done():
             self._sim_task.cancel()
+        if self._live_task is not None and not self._live_task.done():
+            self._live_task.cancel()
         self._neo4j.close()
 
     # ------------------------------------------------------------- pipeline --
@@ -122,6 +133,8 @@ class SocState:
 
     def recompute(self) -> Analysis:
         """Re-run the whole pipeline over the visible events."""
+        started = time.perf_counter()
+        self._dirty = False
         events = self.visible_events()
         correlations = correlate(events, self.settings.correlation)
         graph = build_entity_graph(events, self.inventory)
@@ -134,6 +147,8 @@ class SocState:
             graph=graph,
             computed_at=datetime.now().astimezone(),
         )
+        self._last_analysis_at = self.analysis.computed_at
+        self._last_analysis_ms = round((time.perf_counter() - started) * 1000, 1)
 
         if self._neo4j.enabled:
             try:
@@ -192,7 +207,121 @@ class SocState:
             self._sim_state = "idle"
             self.ingest_errors = []
             self.sources = []
+            self.live.live_only = self.settings.dataset == "live"
             self.bootstrap()
+
+    # ---------------------------------------------------------------- live ---
+
+    async def ingest_live(
+        self,
+        records: list[LogRecord],
+        stream: str,
+        log_format: str | None = None,
+    ) -> LiveIngestResult:
+        """Absorb records that arrived in real time.
+
+        The analysis is not re-run here: the live loop catches up in the
+        background, at most once per recompute interval, so a fast sender gets
+        an immediate answer and the pipeline is never re-run per record.
+        """
+        events, errors = self.live.parse(records, stream, self.inventory, log_format)
+        async with self._lock:
+            known = {e.event_id for e in self._all_events}
+            fresh: list[NormalizedEvent] = []
+            for event in events:
+                if event.event_id not in known:
+                    known.add(event.event_id)
+                    fresh.append(event)
+            if fresh:
+                merged = normalize_all(self._all_events + fresh)
+                overflow = len(merged) - max(1, self.settings.live.max_events)
+                if overflow > 0:
+                    merged = merged[overflow:]  # drop the oldest
+                self._all_events = merged
+                if not self._gating:
+                    self._revealed = len(self._all_events)
+                self.sources = sorted({e.source_log for e in self._all_events})
+                self._dirty = True
+            self.live.record_arrival(
+                stream,
+                received=len(records),
+                accepted=len(fresh),
+                duplicates=len(events) - len(fresh),
+                rejected=len(errors),
+            )
+            total = len(self._all_events)
+        return LiveIngestResult(
+            stream=stream,
+            received=len(records),
+            accepted=len(fresh),
+            duplicates=len(events) - len(fresh),
+            rejected=len(errors),
+            errors=errors[:20],
+            total_events=total,
+        )
+
+    async def flush_live(self) -> None:
+        """Bring the analysis up to date with every live event received."""
+        async with self._lock:
+            if self._dirty:
+                self.recompute()
+
+    async def poll_live_files(self) -> int:
+        """Ingest whatever was appended to the watched folder; returns events accepted."""
+        accepted = 0
+        for stream, records, errors in self.live.poll_files():
+            if errors:
+                self.live.recent_errors.extend(errors[:5])
+            if records:
+                result = await self.ingest_live(records, stream)
+                accepted += result.accepted
+        return accepted
+
+    def start_live_loop(self) -> None:
+        if self.settings.live.enabled and (self._live_task is None or self._live_task.done()):
+            self._live_task = asyncio.create_task(self._live_loop())
+
+    async def _live_loop(self) -> None:
+        """Tail the watched folder and re-run the analysis when events arrived.
+
+        Re-analysis waits at least the configured interval, and at least twice
+        as long as the previous run took, so a large dataset is not re-analysed
+        back to back.
+        """
+        live = self.settings.live
+        tick = max(0.2, min(live.watch_interval_seconds, live.recompute_interval_seconds))
+        last_run = 0.0
+        while True:
+            try:
+                await self.poll_live_files()
+                gap = max(live.recompute_interval_seconds, 2 * (self._last_analysis_ms or 0) / 1000)
+                if self._dirty and time.monotonic() - last_run >= gap:
+                    await self.flush_live()
+                    last_run = time.monotonic()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the feed must keep running
+                logger.warning("live feed error", extra={"error": str(exc)})
+                self.live.recent_errors.append("live loop: {}".format(exc))
+            await asyncio.sleep(tick)
+
+    async def go_live(self, clear: bool = True) -> LiveStatus:
+        """Switch to live analysis, optionally dropping the bundled dataset."""
+        async with self._lock:
+            await self._stop_task()
+            self._gating = False
+            self._sim_state = "idle"
+            if clear:
+                self._all_events = []
+                self.sources = []
+                self.ingest_errors = []
+                self.live.live_only = True
+            self._revealed = len(self._all_events)
+            self.recompute()
+        return self.live_status()
+
+    def live_status(self) -> LiveStatus:
+        return self.live.status(self._dirty, self._last_analysis_at, self._last_analysis_ms)
 
     # ---------------------------------------------------------- simulation ---
 

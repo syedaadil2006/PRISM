@@ -2,7 +2,7 @@
 
 import { NavLink } from "react-router-dom";
 
-import type { Health, SimulationStatus } from "../types";
+import type { Health, LiveStatus, SimulationStatus } from "../types";
 
 const LINKS = [
   { to: "/", label: "Dashboard" },
@@ -17,11 +17,14 @@ const LINKS = [
 export function TopNav({
   health,
   simulation,
+  live: feed,
 }: {
   health: Health | null;
   simulation: SimulationStatus | null;
+  live: LiveStatus | null;
 }) {
   const live = simulation?.state === "running";
+  const streaming = Boolean(feed?.receiving);
 
   return (
     <header className="sticky top-0 z-20 border-b border-ink-700/70 bg-ink-950/90 backdrop-blur">
@@ -60,14 +63,32 @@ export function TopNav({
         </nav>
 
         <div className="ml-auto flex items-center gap-3 font-mono text-[10px] text-slate-500">
-          <span className="flex items-center gap-1.5">
+          {streaming && feed ? (
             <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                live ? "animate-pulse bg-rose-400" : health ? "bg-emerald-400" : "bg-slate-600"
+              className="flex items-center gap-1.5 rounded bg-rose-500/10 px-1.5 py-0.5 text-rose-300 ring-1 ring-rose-500/30"
+              title={`Live feed: ${feed.streams.length} source(s), ${feed.accepted} events received${
+                feed.pending_analysis ? ", analysis catching up" : ""
               }`}
-            />
-            {live ? "SIMULATION LIVE" : health ? "PIPELINE READY" : "CONNECTING"}
-          </span>
+            >
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-400" />
+              LIVE FEED · {feed.events_per_minute}/min
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  live ? "animate-pulse bg-rose-400" : health ? "bg-emerald-400" : "bg-slate-600"
+                }`}
+              />
+              {live
+                ? "SIMULATION LIVE"
+                : feed?.live_only
+                  ? "LIVE MODE · WAITING FOR EVENTS"
+                  : health
+                    ? "PIPELINE READY"
+                    : "CONNECTING"}
+            </span>
+          )}
           {health && (
             <>
               <span>{health.events} events</span>

@@ -28,3 +28,7 @@ backend/data/botsv1/raw/
 
 # Portable Node.js downloaded by the launcher
 .tools/
+
+# Live feed folder contents (the README stays)
+backend/data/live/*
+!backend/data/live/README.md

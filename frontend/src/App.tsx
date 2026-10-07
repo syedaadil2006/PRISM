@@ -16,10 +16,11 @@ import { Users } from "./pages/Users";
 export default function App() {
   const health = useApi(() => api.health(), [], 4000);
   const simulation = useApi(() => api.simulation(), [], 2000);
+  const live = useApi(() => api.live(), [], 2000);
 
   return (
     <div className="min-h-full">
-      <TopNav health={health.data} simulation={simulation.data} />
+      <TopNav health={health.data} simulation={simulation.data} live={live.data} />
       <main className="mx-auto max-w-[1800px]">
         <Routes>
           <Route path="/" element={<Dashboard />} />

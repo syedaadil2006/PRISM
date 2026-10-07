@@ -55,6 +55,10 @@ Double-click **`Start PRISM.bat`**. The launcher (`scripts/start-prism.ps1`) run
    the dashboard build.
 3. **Asks before installing anything.** If something is missing it lists exactly what it will download, from
    where and where it will go, and waits for you to answer **Y**. Answering **N** installs nothing.
+4. **Asks before collecting real-time data.** After PRISM starts, it asks whether it may read this
+   computer's own Windows event logs as they happen (see [Real-time feed](#real-time-feed)). On **Y** it
+   starts the read-only collector in a minimised window; logon and Sysmon events additionally need
+   Windows' administrator approval (UAC), which you can refuse. On **N** nothing is collected.
 
 | Missing | What the launcher installs (with your permission) |
 |---|---|
@@ -337,6 +341,36 @@ account entitlements. See [docs/DATASET.md](docs/DATASET.md).
 
 ---
 
+## Real-time feed
+
+PRISM also analyses events **as they happen**. Anything that can send HTTP, or append a line
+to a file, can feed it:
+
+| Way in | How |
+|---|---|
+| **Push API** | `POST /api/live/events?source=<name>` with one JSON record, a JSON array, `{"records": [...]}`, JSON-lines, or CSV (`Content-Type: text/csv`). Formats are auto-detected. |
+| **Watched folder** | Append lines to any `*.jsonl`, `*.ndjson`, `*.log` or `*.csv` file in `backend/data/live/`. New lines are picked up within about a second. |
+| **Windows collector** | Offered by `Start PRISM.bat` (it asks first), or run `scripts/live_windows_collector.ps1` directly. Forwards this computer's own new Security (4624, 4625, 4648, 4672, 5140), System (7045) and Sysmon (1, 10, 11, 22) events. Run it from an administrator PowerShell to include the Security and Sysmon logs. It only reads logs. |
+| **Live demo** | Double-click **`Start Live Demo.bat`** (PRISM must be running). It streams the demo attack in real time with current timestamps (`scripts/live_replay.py --speed 30`). |
+
+```bash
+curl -X POST "http://localhost:8000/api/live/events?source=hr-pc-sysmon" -H "Content-Type: application/x-ndjson" --data-binary @events.jsonl
+```
+
+Each source keeps its own ids (prefixed with the source name), resent records are counted once,
+and the analysis is re-run in the background at most once a second (and never more often than
+twice its own run time), so a fast sender gets an immediate answer. `GET /api/live/status` shows
+events received per source, events per minute and whether the analysis has caught up; the top bar
+of the dashboard shows **LIVE FEED** while events arrive. `POST /api/live/start` clears the bundled
+dataset so only live events are analysed (`POST /api/logs/reset` brings it back), or start with
+`PRISM_DATASET=live`. Settings use the `PRISM_LIVE_` prefix (`WATCH_DIR`, `RECOMPUTE_INTERVAL_SECONDS`,
+`MAX_EVENTS`, `MAX_BATCH`, `ENABLED`).
+
+Every re-analysis still runs over all retained events, so very large live volumes (tens of thousands of
+events) are re-analysed less often; `PRISM_LIVE_MAX_EVENTS` (default 50,000) bounds memory.
+
+---
+
 ## Configuration
 
 Every threshold and weight is environment-overridable — see
@@ -405,6 +439,9 @@ docs/            architecture, API reference, dataset notes, Neo4j schema
 
 ## Documentation
 
+- **[docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)** — code, architecture, algorithms, APIs,
+  AI-generated components, models, data flow, design decisions, security considerations and
+  technical implementation, in one place.
 - [docs/AGENTS.md](docs/AGENTS.md) — the agent layer: what each agent decides,
   the tool interface, verification, and the optional LLM guardrail
 - [docs/DEMO.md](docs/DEMO.md) — a five-minute walkthrough with the exact

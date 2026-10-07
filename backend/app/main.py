@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.agent_routes import router as agent_router
+from app.api.live_routes import router as live_router
 from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.logging_config import configure_logging, get_logger
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     if settings.simulation_autostart:
         await state.start_simulation(restart=True)
+    state.start_live_loop()
 
     try:
         yield
@@ -92,6 +94,7 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
     app.include_router(agent_router)
+    app.include_router(live_router)
 
     frontend_dist = PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.is_dir():

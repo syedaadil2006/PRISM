@@ -132,6 +132,27 @@ class LLMSettings(BaseSettings):
         return self.provider != "none" and bool(self.resolved_api_key)
 
 
+class LiveSettings(BaseSettings):
+    """Real-time ingestion: events pushed over HTTP or appended to watched files.
+
+    Analysis is re-run in the background, throttled so a fast feed cannot keep
+    the pipeline permanently busy.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_LIVE_", extra="ignore")
+
+    enabled: bool = True
+    #: Folder whose log files are tailed: new lines are ingested as they appear.
+    watch_dir: Path = BACKEND_ROOT / "data" / "live"
+    watch_interval_seconds: float = 1.0
+    #: Minimum gap between two re-analyses while events keep arriving.
+    recompute_interval_seconds: float = 1.0
+    #: Oldest events are dropped beyond this, so a long-running feed stays bounded.
+    max_events: int = 50_000
+    #: Largest number of records accepted in one HTTP request.
+    max_batch: int = 5_000
+
+
 class Neo4jSettings(BaseSettings):
     """Optional persistent graph store. Disabled by default so the prototype
     runs with zero external services."""
@@ -165,6 +186,8 @@ class Settings(BaseSettings):
     #:   "botsv1"    - real telemetry from Splunk's Boss of the SOC v1 (CC0),
     #:                 the Cerber ransomware scenario. See docs/DATASET.md.
     #:   "synthetic" - the hand-authored HR-PC -> FINANCE-PC -> DC01 scenario.
+    #:   "live"      - start empty and analyse only events that arrive in real
+    #:                 time (POST /api/live/events or the watched folder).
     #: PRISM_DEMO_DIR / PRISM_INVENTORY_FILE override either.
     #: Stays "synthetic" until backend/scripts/build_botsv1_scenario.py has run.
     dataset: str = "synthetic"
@@ -180,6 +203,11 @@ class Settings(BaseSettings):
             ),
             "synthetic": (
                 BACKEND_ROOT / "data" / "demo",
+                BACKEND_ROOT / "data" / "inventory" / "topology.json",
+            ),
+            # No bundled dataset: everything arrives through the live feed.
+            "live": (
+                None,
                 BACKEND_ROOT / "data" / "inventory" / "topology.json",
             ),
         }
@@ -214,6 +242,7 @@ class Settings(BaseSettings):
     lateral: LateralMovementSettings = Field(default_factory=LateralMovementSettings)
     prediction: PredictionSettings = Field(default_factory=PredictionSettings)
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
+    live: LiveSettings = Field(default_factory=LiveSettings)
     agents: AgentSettings = Field(default_factory=AgentSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 

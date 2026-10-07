@@ -7,6 +7,10 @@
 # 3. If anything is missing, lists exactly what will be downloaded, from
 #    where, and where it will go, then ASKS before installing anything.
 # 4. Starts PRISM on http://localhost:8000 and opens the browser.
+# 5. ASKS whether PRISM may collect real-time events from this computer's
+#    Windows event logs. Only on "yes" does it start the read-only collector;
+#    the logon and Sysmon logs additionally need Windows' own administrator
+#    approval (UAC), which the user can refuse.
 #
 # Everything is installed for the current user only: no administrator
 # rights, no system-wide changes, and no changes to security settings.
@@ -17,6 +21,7 @@
 #   PRISM_PORT        port to use instead of 8000
 #   PRISM_NO_BROWSER  set to 1 to skip opening the browser
 #   PRISM_ASSUME_YES  set to 1 to answer "yes" to the install question
+#   PRISM_COLLECT     no | yes | admin  answers the real-time collection question
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -59,6 +64,52 @@ function Test-PrismHealth {
 }
 
 function Open-Browser { if (-not $env:PRISM_NO_BROWSER) { Start-Process "http://localhost:$Port" } }
+
+function Get-CollectorProcess {
+    Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'live_windows_collector\.ps1' } | Select-Object -First 1
+}
+
+# Asks before collecting anything. Nothing is collected on "no" or Enter.
+function Request-LiveCollection {
+    if (Get-CollectorProcess) { Info 'The real-time Windows collector is already running.'; return }
+    Write-Host ''
+    Write-Host 'Real-time data from this computer' -ForegroundColor Cyan
+    Write-Host '---------------------------------' -ForegroundColor DarkCyan
+    Info 'PRISM can analyse this computer''s own Windows events as they happen'
+    Info '(logons, failed logons, new services, and Sysmon process/DNS events if'
+    Info 'Sysmon is installed). The collector only READS the event logs and sends'
+    Info "them to PRISM on this computer (http://localhost:$Port). Nothing leaves the"
+    Info 'computer and nothing is changed. Close its window at any time to stop it.'
+    Write-Host ''
+    if ($env:PRISM_COLLECT) { $answer = $env:PRISM_COLLECT; Info "Collect real-time events? [Y/N]: $answer (PRISM_COLLECT)" }
+    else { $answer = Read-Host '  Allow PRISM to collect real-time events from this computer? [Y/N]' }
+    if ($answer -notmatch '^\s*(y|yes|admin)\s*$') { Info 'OK, no real-time collection. PRISM shows the demo dataset only.'; return }
+
+    $elevate = $answer -match 'admin'
+    if (-not $elevate -and -not $env:PRISM_COLLECT) {
+        Write-Host ''
+        Info 'Logon events and Sysmon can only be read with administrator rights.'
+        Info 'Windows will show its own permission prompt (UAC) if you choose Y.'
+        $adminAnswer = Read-Host '  Include them (needs administrator approval)? [Y/N]'
+        $elevate = $adminAnswer -match '^\s*(y|yes)\s*$'
+    }
+
+    $collector = Join-Path $Root 'scripts\live_windows_collector.ps1'
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -Server http://127.0.0.1:$Port"
+    if ($elevate) {
+        try {
+            Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Minimized
+            Info 'Real-time collection started with administrator approval (all supported logs).'
+            return
+        } catch {
+            Info 'Administrator approval was not given. Collecting without it (System log only).'
+        }
+    }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Minimized
+    Info 'Real-time collection started (System log; logon and Sysmon events need administrator rights).'
+    Info 'The top bar of the dashboard shows LIVE FEED while events arrive.'
+}
 
 function Test-PythonVersion($version) { return ($version -ge $MinPython -and $version -lt $MaxPython) }
 
@@ -147,6 +198,7 @@ Update-SessionPath
 
 if (Test-PrismHealth) {
     Info "PRISM is already running on http://localhost:$Port"
+    Request-LiveCollection
     Open-Browser
     exit 0
 }
@@ -341,5 +393,6 @@ while (-not (Test-PrismHealth)) {
 }
 Write-Host "  PRISM is running on http://localhost:$Port" -ForegroundColor Green
 Info 'To stop PRISM, close the minimised "PRISM server" window.'
+Request-LiveCollection
 Open-Browser
 exit 0

@@ -189,8 +189,12 @@ Two datasets are bundled; choose with PRISM_DATASET:
     how important each computer is) are assumptions, recorded in
     backend/data/botsv1/MANIFEST.json.
 
-Note: the data is replayed from files. PRISM analyses whatever arrives
-immediately, but it is not connected to a live network feed.
+Real-time feed: PRISM can also analyse events as they happen. Other tools
+can push events to it (POST /api/live/events), it watches the folder
+backend/data/live for new log lines, and scripts/live_windows_collector.ps1
+forwards this computer's own Windows events. "Start Live Demo.bat" streams
+the demo attack in real time so you can watch the story build up. The top
+bar shows LIVE FEED while events arrive.
 
 
 HOW TO RUN
@@ -200,6 +204,9 @@ Easiest (Windows): double-click "Start PRISM.bat". It checks the computer
 packages). If something is missing it lists what it will install and asks
 for your permission first (answer Y or N). No admin rights are needed.
 Later launches take a few seconds.
+After starting, it asks whether PRISM may read this computer's Windows
+event logs in real time. Answer N to skip. Logon events need administrator
+approval, which Windows asks for separately.
 
 Manual steps:
   python -m venv .venv

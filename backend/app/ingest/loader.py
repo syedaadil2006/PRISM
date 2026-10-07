@@ -129,6 +129,22 @@ def ingest_directory(
     return events, errors
 
 
+def _tag(event: NormalizedEvent, tag: str) -> None:
+    """Add a tag once, so enrichment can be re-run as live events arrive."""
+    if tag not in event.tags:
+        event.tags.append(tag)
+
+
+def _set_finding(event: NormalizedEvent, marker: str, detail: str) -> None:
+    """Replace an earlier version of the same aggregate finding.
+
+    Counts in the text grow as live events arrive ("5 queries", then "6"), so
+    the previous wording is dropped rather than kept alongside the new one.
+    """
+    event.tags[:] = [t for t in event.tags if not (t.startswith("finding:") and marker in t)]
+    event.tags.append("finding:" + detail)
+
+
 def enrich_dns_volume(events: list[NormalizedEvent]) -> list[NormalizedEvent]:
     """Promote repetitive DNS lookups to HIGH_VOLUME_DNS (beaconing signal).
 
@@ -156,8 +172,8 @@ def enrich_dns_volume(events: list[NormalizedEvent]) -> list[NormalizedEvent]:
                 event.action = Action.HIGH_VOLUME_DNS
             if event.severity.rank < Severity.MEDIUM.rank:
                 event.severity = Severity.MEDIUM
-            event.tags.append("finding:" + detail)
-            event.tags.append("beaconing")
+            _set_finding(event, " queries for {} from {} ".format(domain, host), detail)
+            _tag(event, "beaconing")
     return events
 
 
@@ -188,8 +204,8 @@ def enrich_auth_failures(events: list[NormalizedEvent]) -> list[NormalizedEvent]
             event.suspicious = True
             if event.severity.rank < Severity.MEDIUM.rank:
                 event.severity = Severity.MEDIUM
-            event.tags.append("finding:" + detail)
-            event.tags.append("credential-guessing")
+            _set_finding(event, " failed logons for {} ".format(user), detail)
+            _tag(event, "credential-guessing")
     return events
 
 
