@@ -141,6 +141,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": f"Your role ({principal.role}) cannot do this; it needs {needed}."},
             )
 
+        if principal.must_change_password and not path.startswith("/api/auth/"):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Choose a new password before using PRISM.", "password_change_required": True},
+            )
+
         request.state.principal = principal
         response = await call_next(request)
         # Sign-in and successful admin actions write their own, more specific entries.

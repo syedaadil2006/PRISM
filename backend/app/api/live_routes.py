@@ -16,11 +16,12 @@ import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.deps import get_state
 from app.ingest.parsers import PARSERS
 from app.services.live_feed import LiveIngestResult, LiveStatus, decode_body, stream_name
-from app.services.soc_state import SocState
+from app.services.soc_state import IngestBusy, SocState
 
 router = APIRouter(prefix="/api/live", tags=["live"])
 
@@ -33,7 +34,7 @@ def live_status(state: StateDep) -> LiveStatus:
     return state.live_status()
 
 
-@router.post("/events", response_model=LiveIngestResult)
+@router.post("/events", response_model=LiveIngestResult, responses={429: {"description": "Analysis is behind; retry after the Retry-After seconds"}})
 async def push_events(
     request: Request,
     state: StateDep,
@@ -69,7 +70,15 @@ async def push_events(
             status_code=413,
             detail="at most {} records per request".format(state.settings.live.max_batch),
         )
-    return await state.ingest_live(records, stream_name(source), log_format)
+    try:
+        return await state.ingest_live(records, stream_name(source), log_format)
+    except IngestBusy as busy:
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=429,
+            content={"detail": f"PRISM is catching up ({busy.pending} events waiting). Retry shortly.",
+                     "queued": busy.pending},
+            headers={"Retry-After": str(busy.retry_after)},
+        )
 
 
 @router.post("/start", response_model=LiveStatus)

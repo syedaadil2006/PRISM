@@ -213,3 +213,55 @@ def test_storage_falls_back_to_memory_when_postgres_is_unavailable(tmp_path: Pat
     sqlite.set_meta("k", "1")
     sqlite.set_meta("k", "2")  # upsert
     assert sqlite.get_meta("k") == "2" and sqlite.describe("demo")["engine"] == "sqlite"
+
+
+@pytest.fixture()
+def fresh_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("PRISM_AUTH_ENABLED", "true")
+    monkeypatch.setenv("PRISM_AUTH_TOKEN", CODE)
+    monkeypatch.setenv("PRISM_AUTH_DB_URL", str(tmp_path / "security.db"))
+    monkeypatch.setenv("PRISM_AUTH_DEFAULT_ADMIN_ENABLED", "true")
+    get_settings.cache_clear()
+    application = create_app()
+    with TestClient(application):
+        yield application
+    get_settings.cache_clear()
+
+
+def test_fresh_install_has_the_documented_admin_who_must_change_password(fresh_install):
+    client = _client(fresh_install)
+    assert client.get("/api/auth/status").json()["has_accounts"] is True
+    login = client.post("/api/auth/login", json={"username": "Admin", "password": "Admin@123"}).json()
+    assert login["user"] == "admin" and login["role"] == "admin" and login["password_change_required"] is True
+    blocked = client.get("/api/stats")
+    assert blocked.status_code == 403 and blocked.json()["password_change_required"] is True
+    assert client.post("/api/auth/password", json={"current_password": "Admin@123",
+                                                   "new_password": "Admin@123"}).status_code == 400
+    assert client.post("/api/auth/password", json={"current_password": "Admin@123",
+                                                   "new_password": "short"}).status_code == 400
+    changed = client.post("/api/auth/password", json={"current_password": "Admin@123",
+                                                      "new_password": "a much better passphrase"})
+    assert changed.status_code == 200 and changed.json()["password_change_required"] is False
+    assert client.get("/api/stats").status_code == 200
+    assert _client(fresh_install).post("/api/auth/login", json={"username": "admin", "password": "Admin@123"}).status_code == 401
+    actions = {e["action"] for e in client.get("/api/admin/audit").json()}
+    assert {"create default admin", "change password"} <= actions
+
+
+def test_default_admin_is_not_recreated(fresh_install):
+    store = fresh_install.state.security
+    assert store.ensure_default_admin() is False  # accounts exist already
+    store.delete_user("admin")
+    _make(fresh_install, "someone", "admin")
+    assert store.ensure_default_admin() is False and store.get_user("admin") is None
+
+
+def test_password_reset_by_an_admin_is_temporary(app):
+    _make(app, "asha", "analyst")
+    _client(app).patch("/api/admin/users/asha", headers=ADMIN, json={"password": "temporary password 1"})
+    client = _signed_in(app, "asha", "temporary password 1")
+    assert client.get("/api/auth/status").json()["password_change_required"] is True
+    assert client.get("/api/stats").status_code == 403
+    client.post("/api/auth/password", json={"current_password": "temporary password 1",
+                                            "new_password": "my own password 22"})
+    assert client.get("/api/stats").status_code == 200

@@ -21,6 +21,7 @@ class Account(BaseModel):
     disabled: bool
     created_at: str
     last_login: str | None = None
+    must_change_password: bool = False
 
 
 class NewAccount(BaseModel):
@@ -89,7 +90,9 @@ def update_user(request: Request, username: str, body: AccountChange) -> dict:
     if username == actor and (body.disabled or (body.role is not None and body.role != "admin")):
         raise HTTPException(status_code=409, detail="You cannot disable your own account or remove your own admin role.")
     try:
-        user = store.update_user(username, role=body.role, disabled=body.disabled, password=body.password)
+        # A password set by an admin is temporary: the user chooses their own at next sign-in.
+        user = store.update_user(username, role=body.role, disabled=body.disabled, password=body.password,
+                                 require_change=body.password is not None and username != actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="No such user.") from exc
     except AccountError as exc:

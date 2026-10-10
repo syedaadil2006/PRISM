@@ -3,11 +3,27 @@
 Everything the API returns is derived here. Ingesting a file, stepping the demo
 simulation and resetting all share a single recompute path, so the dashboard can
 never show a graph that disagrees with the chain list.
+
+Scaling model (one process, no external queue):
+
+* **Ingestion is a fast queue.** Live events are parsed off the event loop,
+  de-duplicated against a running set of ids, saved to storage (when enabled,
+  so a restart loses nothing) and appended to a pending list. That is all.
+* **Analysis runs in a worker thread.** The background loop merges the pending
+  events and re-runs the pipeline in a thread, then swaps the result in. The
+  API keeps answering from the previous analysis meanwhile.
+* **Backpressure.** When more than ``live.max_pending`` events are waiting for
+  analysis, new batches are refused with :class:`IngestBusy` (HTTP 429 with
+  Retry-After) instead of growing memory without limit.
+* **Locks.** ``_analysis_lock`` lets one analysis or state change run at a
+  time; ``_lock`` guards the short critical sections. Always take
+  ``_analysis_lock`` first.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,6 +50,15 @@ from app.services.forwarder import Forwarder
 from app.services.storage import Store
 
 logger = get_logger(__name__)
+
+
+class IngestBusy(Exception):
+    """Too many events are waiting for analysis; the sender should retry later."""
+
+    def __init__(self, pending: int, retry_after: int) -> None:
+        super().__init__(f"{pending} events are waiting for analysis")
+        self.pending = pending
+        self.retry_after = retry_after
 
 
 class SimulationStatus(BaseModel):
@@ -82,6 +107,18 @@ class SocState:
         self._sim_state = "idle"
         self._sim_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
+        self._analysis_lock = asyncio.Lock()
+        #: Serialises parsing: each stream's parser context is not thread-safe.
+        self._parse_lock = threading.Lock()
+        #: Live events received but not yet merged into the analysed set.
+        self._pending: list[NormalizedEvent] = []
+        self._known_ids: set[str] = set()
+        #: True while an analysis runs in the worker thread.
+        self._analysing = False
+        #: Counters for /api/metrics.
+        self.counters: dict[str, float] = {
+            "analysis_runs": 0, "analysis_seconds": 0.0, "ingest_batches": 0, "ingest_busy": 0,
+        }
         self._neo4j = Neo4jGraphStore(settings.neo4j)
 
         self.store = Store(settings.storage)
@@ -123,6 +160,8 @@ class SocState:
             )
 
         self._restore_stored_events()
+        self._pending = []
+        self._known_ids = {e.event_id for e in self._all_events}
         self.recompute()
 
     @property
@@ -160,24 +199,82 @@ class SocState:
             return self._all_events[: self._revealed]
         return list(self._all_events)
 
-    def recompute(self) -> Analysis:
-        """Re-run the whole pipeline over the visible events."""
+    def _compute(self, events: list[NormalizedEvent]) -> tuple[Analysis, float]:
+        """The pipeline itself. Pure apart from enriching events; safe in a thread."""
         started = time.perf_counter()
-        self._dirty = False
-        events = self.visible_events()
         correlations = correlate(events, self.settings.correlation)
         graph = build_entity_graph(events, self.inventory)
         chains = build_chains(events, correlations, graph, self.inventory, self.settings)
-
-        self.analysis = Analysis(
+        analysis = Analysis(
             events=events,
             correlations=correlations,
             chains=chains,
             graph=graph,
             computed_at=datetime.now().astimezone(),
         )
-        self._last_analysis_at = self.analysis.computed_at
-        self._last_analysis_ms = round((time.perf_counter() - started) * 1000, 1)
+        return analysis, round((time.perf_counter() - started) * 1000, 1)
+
+    def _merge(self, base: list[NormalizedEvent], pending: list[NormalizedEvent]) -> tuple[list[NormalizedEvent], bool]:
+        """``base`` plus ``pending`` in order, capped at live.max_events. Returns (events, trimmed)."""
+        if not pending:
+            return base, False
+        merged = normalize_all(base + pending)
+        overflow = len(merged) - max(1, self.settings.live.max_events)
+        if overflow > 0:
+            merged = merged[overflow:]  # drop the oldest
+            self.store.trim_events(self.settings.live.max_events, self.storage_scope)
+        return merged, overflow > 0
+
+    def _adopt(self, merged: list[NormalizedEvent], trimmed: bool) -> None:
+        """Make ``merged`` the event set (call with ``_lock`` held, or from sync code)."""
+        changed = merged is not self._all_events
+        self._all_events = merged
+        if not self._gating:
+            self._revealed = len(merged)
+        if changed:
+            self.sources = sorted({e.source_log for e in merged})
+        if trimmed:
+            self._known_ids = {e.event_id for e in merged} | {e.event_id for e in self._pending}
+
+    def recompute(self) -> Analysis:
+        """Re-run the whole pipeline over the visible events (blocking)."""
+        self._dirty = False
+        pending, self._pending = self._pending, []
+        self._adopt(*self._merge(self._all_events, pending))
+        return self._apply(*self._compute(self.visible_events()))
+
+    async def recompute_async(self) -> Analysis:
+        """Merge pending events and re-run the pipeline in a worker thread.
+
+        Call with ``_analysis_lock`` held. Only live ingestion can run meanwhile,
+        and it only appends to ``_pending``, so swapping the result in is safe.
+        """
+        async with self._lock:
+            self._dirty = False
+            pending, self._pending = self._pending, []
+            base, gating, revealed = self._all_events, self._gating, self._revealed
+
+        def work() -> tuple[list[NormalizedEvent], bool, Analysis, float]:
+            merged, trimmed = self._merge(base, pending)
+            visible = merged[:revealed] if gating else merged
+            return (merged, trimmed, *self._compute(visible))
+
+        self._analysing = True
+        try:
+            merged, trimmed, analysis, ms = await asyncio.to_thread(work)
+        finally:
+            self._analysing = False
+        async with self._lock:
+            self._adopt(merged, trimmed)
+            return self._apply(analysis, ms)
+
+    def _apply(self, analysis: Analysis, ms: float) -> Analysis:
+        self.analysis = analysis
+        self._last_analysis_at = analysis.computed_at
+        self._last_analysis_ms = ms
+        self.counters["analysis_runs"] += 1
+        self.counters["analysis_seconds"] += ms / 1000
+        events, correlations, chains, graph = analysis.events, analysis.correlations, analysis.chains, analysis.graph
         # New or changed chains are pushed to any configured SIEM (background thread).
         self.forwarder.notify(chains)
 
@@ -203,23 +300,22 @@ class SocState:
         self, payloads: list[tuple[str, bytes]], log_format: str | None = None
     ) -> IngestSummary:
         """Normalize and absorb one or more uploaded log files."""
-        accepted: list[NormalizedEvent] = []
-        errors: list[str] = []
-        for filename, raw in payloads:
-            events, file_errors = ingest_payload(raw, filename, self.inventory, log_format)
-            accepted.extend(events)
-            errors.extend(file_errors)
+        def parse() -> tuple[list[NormalizedEvent], list[str]]:
+            accepted: list[NormalizedEvent] = []
+            errors: list[str] = []
+            for filename, raw in payloads:
+                events, file_errors = ingest_payload(raw, filename, self.inventory, log_format)
+                accepted.extend(events)
+                errors.extend(file_errors)
+            return accepted, errors
 
-        async with self._lock:
-            known = {e.event_id for e in self._all_events}
-            fresh = [e for e in accepted if e.event_id not in known]
-            self.store.save_events(fresh, "upload", self.storage_scope)
-            self._all_events = normalize_all(self._all_events + fresh)
-            if not self._gating:
-                self._revealed = len(self._all_events)
-            self.sources = sorted({e.source_log for e in self._all_events})
-            self.ingest_errors = errors
-            self.recompute()
+        accepted, errors = await asyncio.to_thread(parse)
+        async with self._analysis_lock:
+            async with self._lock:
+                fresh = self._take_new(accepted)
+                self.ingest_errors = errors
+            await asyncio.to_thread(self.store.save_events, fresh, "upload", self.storage_scope)
+            await self.recompute_async()
 
         return IngestSummary(
             accepted=len(fresh),
@@ -229,9 +325,25 @@ class SocState:
             sources=self.sources,
         )
 
+    def _take_new(self, events: list[NormalizedEvent]) -> list[NormalizedEvent]:
+        """Queue the events not seen before (call with ``_lock`` held)."""
+        fresh: list[NormalizedEvent] = []
+        for event in events:
+            if event.event_id not in self._known_ids:
+                self._known_ids.add(event.event_id)
+                fresh.append(event)
+        if fresh:
+            self._pending.extend(fresh)
+            self._dirty = True
+        return fresh
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
     async def clear(self) -> None:
         """Drop everything and reload the configured dataset."""
-        async with self._lock:
+        async with self._analysis_lock, self._lock:
             await self._stop_task()
             self._all_events = []
             self._revealed = 0
@@ -257,26 +369,20 @@ class SocState:
         background, at most once per recompute interval, so a fast sender gets
         an immediate answer and the pipeline is never re-run per record.
         """
-        events, errors = self.live.parse(records, stream, self.inventory, log_format)
+        limit = self.settings.live.max_pending
+        if limit and len(self._pending) >= limit:
+            self.counters["ingest_busy"] += 1
+            retry = max(1, round(2 * (self._last_analysis_ms or 1000) / 1000))
+            raise IngestBusy(len(self._pending), retry)
+
+        def parse() -> tuple[list[NormalizedEvent], list[str]]:
+            with self._parse_lock:
+                return self.live.parse(records, stream, self.inventory, log_format)
+
+        events, errors = await asyncio.to_thread(parse)
         async with self._lock:
-            known = {e.event_id for e in self._all_events}
-            fresh: list[NormalizedEvent] = []
-            for event in events:
-                if event.event_id not in known:
-                    known.add(event.event_id)
-                    fresh.append(event)
-            if fresh:
-                self.store.save_events(fresh, "live", self.storage_scope)
-                merged = normalize_all(self._all_events + fresh)
-                overflow = len(merged) - max(1, self.settings.live.max_events)
-                if overflow > 0:
-                    merged = merged[overflow:]  # drop the oldest
-                    self.store.trim_events(self.settings.live.max_events, self.storage_scope)
-                self._all_events = merged
-                if not self._gating:
-                    self._revealed = len(self._all_events)
-                self.sources = sorted({e.source_log for e in self._all_events})
-                self._dirty = True
+            fresh = self._take_new(events)
+            self.counters["ingest_batches"] += 1
             self.live.record_arrival(
                 stream,
                 received=len(records),
@@ -284,7 +390,10 @@ class SocState:
                 duplicates=len(events) - len(fresh),
                 rejected=len(errors),
             )
-            total = len(self._all_events)
+            total = len(self._all_events) + len(self._pending)
+        if fresh:
+            # Kept on disk before the sender is answered, so a restart loses nothing.
+            await asyncio.to_thread(self.store.save_events, fresh, "live", self.storage_scope)
         return LiveIngestResult(
             stream=stream,
             received=len(records),
@@ -297,9 +406,9 @@ class SocState:
 
     async def flush_live(self) -> None:
         """Bring the analysis up to date with every live event received."""
-        async with self._lock:
+        async with self._analysis_lock:
             if self._dirty:
-                self.recompute()
+                await self.recompute_async()
 
     async def poll_live_files(self) -> int:
         """Ingest whatever was appended to the watched folder; returns events accepted."""
@@ -308,7 +417,12 @@ class SocState:
             if errors:
                 self.live.recent_errors.extend(errors[:5])
             if records:
-                result = await self.ingest_live(records, stream)
+                try:
+                    result = await self.ingest_live(records, stream)
+                except IngestBusy:
+                    # Files can wait: they are re-read from the same position next time.
+                    self.live.recent_errors.append("watched folder: analysis busy, records skipped")
+                    break
                 accepted += result.accepted
         return accepted
 
@@ -342,7 +456,7 @@ class SocState:
 
     async def go_live(self, clear: bool = True) -> LiveStatus:
         """Switch to live analysis, optionally dropping the bundled dataset."""
-        async with self._lock:
+        async with self._analysis_lock, self._lock:
             await self._stop_task()
             self._gating = False
             self._sim_state = "idle"
@@ -352,12 +466,17 @@ class SocState:
                 self.ingest_errors = []
                 self.live.live_only = True
                 self.store.clear_events(self.storage_scope)
+                self._pending = []
+                self._known_ids = set()
             self._revealed = len(self._all_events)
             self.recompute()
         return self.live_status()
 
     def live_status(self) -> LiveStatus:
-        return self.live.status(self._dirty, self._last_analysis_at, self._last_analysis_ms)
+        status = self.live.status(self._dirty or self._analysing, self._last_analysis_at, self._last_analysis_ms)
+        status.queued = len(self._pending)
+        status.max_queued = self.settings.live.max_pending
+        return status
 
     # ---------------------------------------------------------- simulation ---
 
@@ -384,7 +503,7 @@ class SocState:
 
     async def start_simulation(self, restart: bool = True) -> SimulationStatus:
         """Reveal the dataset progressively, recomputing after every tick."""
-        async with self._lock:
+        async with self._analysis_lock, self._lock:
             await self._stop_task()
             self._gating = True
             if restart or self._revealed >= len(self._all_events):
@@ -397,7 +516,7 @@ class SocState:
     async def _run_simulation(self) -> None:
         while self._revealed < len(self._all_events):
             await asyncio.sleep(self.settings.simulation_tick_seconds)
-            async with self._lock:
+            async with self._analysis_lock, self._lock:
                 if self._sim_state != "running":
                     return
                 self._revealed = min(
@@ -422,7 +541,7 @@ class SocState:
 
     async def step_simulation(self, count: int = 1) -> SimulationStatus:
         """Advance the simulation manually, for presenting at your own pace."""
-        async with self._lock:
+        async with self._analysis_lock, self._lock:
             await self._stop_task()
             self._gating = True
             if self._sim_state in {"idle", "completed"} and self._revealed >= len(self._all_events):
@@ -434,7 +553,7 @@ class SocState:
 
     async def reset_simulation(self, show_all: bool = False) -> SimulationStatus:
         """Rewind to the start, or drop gating and show the full dataset."""
-        async with self._lock:
+        async with self._analysis_lock, self._lock:
             await self._stop_task()
             self._gating = not show_all
             self._revealed = len(self._all_events) if show_all else 0

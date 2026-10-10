@@ -10,7 +10,10 @@ const INPUT =
 export function SignIn({ status, onSignedIn }: { status: AuthStatus; onSignedIn: () => void }) {
   const accounts = status.accounts !== false;
   const codeAllowed = status.access_code !== false;
-  const [mode, setMode] = useState<"account" | "code">(accounts ? "account" : "code");
+  // A fresh install has no accounts yet: start on the access code.
+  const [mode, setMode] = useState<"account" | "code">(
+    accounts && status.has_accounts ? "account" : "code",
+  );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -118,12 +121,17 @@ export function SignIn({ status, onSignedIn }: { status: AuthStatus; onSignedIn:
         </button>
         <p className="text-[11px] leading-relaxed text-slate-500">
           {mode === "account" ? (
-            <>Accounts are created by a PRISM admin on the Admin page.</>
+            <>
+              Accounts are created by a PRISM admin on the Admin page. No account yet? Use the access
+              code.
+            </>
           ) : (
             <>
-              Start PRISM.bat signs you in automatically. The code is also in{" "}
+              Start PRISM.bat signs you in automatically. Otherwise paste the code from{" "}
               <span className="font-mono text-slate-400">backend\data\.prism_token</span> on the
-              computer running PRISM.
+              computer running PRISM (with Docker:{" "}
+              <span className="font-mono text-slate-400">docker compose exec prism cat /data/.prism_token</span>
+              ). There is no default password: every installation gets its own random code.
             </>
           )}
         </p>

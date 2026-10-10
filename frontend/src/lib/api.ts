@@ -96,6 +96,8 @@ export interface AuthStatus {
   /** "user" (named account) or "access-code". */
   kind?: string | null;
   accounts?: boolean;
+  has_accounts?: boolean;
+  password_change_required?: boolean;
   access_code?: boolean;
 }
 
@@ -105,6 +107,7 @@ export interface Account {
   disabled: boolean;
   created_at: string;
   last_login: string | null;
+  must_change_password?: boolean;
 }
 
 export interface AuditEntry {

@@ -229,9 +229,17 @@ Manual steps:
 
 Open http://localhost:8000     (API documentation: /docs)
 
+SIGNING IN
+----------
+Default login on first start:  user name Admin, password Admin@123
+  (the first sign-in asks you to choose a new password of 12+ characters).
+Access code (Access code tab): Start PRISM.bat signs you in automatically;
+  otherwise paste the code from backend\data\.prism_token on the computer
+  running PRISM. Each installation gets its own random code.
+
 Real BOTS data instead:   set PRISM_DATASET=botsv1 before starting.
-Tests (99 passing):       .venv/Scripts/python.exe -m pytest backend/tests -c backend/pytest.ini --rootdir backend
-Docker:                   docker compose up --build
+Tests (180 passing):       .venv/Scripts/python.exe -m pytest backend/tests -c backend/pytest.ini --rootdir backend
+Docker:                   docker compose up -d --build   (then http://localhost:8000)
 
 
 LIMITATIONS

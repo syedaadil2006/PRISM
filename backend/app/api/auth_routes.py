@@ -18,8 +18,12 @@ class AuthStatus(BaseModel):
     role: str | None = None
     #: "user" (named account) or "access-code".
     kind: str | None = None
+    #: The signed-in account must choose a new password first (default admin, or a reset).
+    password_change_required: bool = False
     #: Whether named accounts can sign in (the sign-in screen shows the form).
     accounts: bool = False
+    #: Whether any named account exists yet (a fresh install signs in with the access code).
+    has_accounts: bool = False
     access_code: bool = True
 
 
@@ -49,7 +53,9 @@ def _status(request: Request) -> AuthStatus:
         user=principal.username if principal and enabled else None,
         role=principal.role if principal else None,
         kind=principal.kind if principal and enabled else None,
+        password_change_required=bool(principal and principal.must_change_password),
         accounts=_security(request) is not None,
+        has_accounts=bool(_security(request) and _security(request).has_users()),
         access_code=bool(getattr(state, "access_code_enabled", True)),
     )
 
@@ -116,7 +122,9 @@ def login(request: Request, response: Response, body: LoginRequest) -> AuthStatu
     audit(request, principal.username, "login")
     _set_cookie(request, response, cookie, int(store.settings.session_hours * 3600))
     return AuthStatus(enabled=True, authenticated=True, user=principal.username, role=principal.role,
-                      kind="user", accounts=True, access_code=bool(getattr(state, "access_code_enabled", True)))
+                      kind="user", accounts=True, has_accounts=True,
+                      access_code=bool(getattr(state, "access_code_enabled", True)),
+                      password_change_required=principal.must_change_password)
 
 
 @router.post("/logout", response_model=AuthStatus)
@@ -142,6 +150,8 @@ def change_password(request: Request, response: Response, body: PasswordChange) 
     if store.authenticate(principal.username, body.current_password) is None:
         audit(request, principal.username, "change password", outcome="failed")
         raise HTTPException(status_code=401, detail="The current password is not correct.")
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=400, detail="Choose a password different from the current one.")
     try:
         store.update_user(principal.username, password=body.new_password)
     except AccountError as exc:
@@ -150,4 +160,5 @@ def change_password(request: Request, response: Response, body: PasswordChange) 
     cookie = store.create_session(principal.username, client_address(request))
     _set_cookie(request, response, cookie, int(store.settings.session_hours * 3600))
     return AuthStatus(enabled=True, authenticated=True, user=principal.username, role=principal.role, kind="user",
-                      accounts=True, access_code=bool(getattr(request.app.state, "access_code_enabled", True)))
+                      accounts=True, has_accounts=True,
+                      access_code=bool(getattr(request.app.state, "access_code_enabled", True)))

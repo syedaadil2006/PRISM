@@ -14,6 +14,8 @@ os.environ.setdefault("PRISM_STORAGE_ENABLED", "false")
 # The API access code is switched off for the suite; test_auth.py turns it on.
 os.environ.setdefault("PRISM_AUTH_ENABLED", "false")
 # Tests that turn it on must never touch the real accounts database.
+# The default first-start admin is switched off for the suite; test_accounts.py checks it.
+os.environ.setdefault("PRISM_AUTH_DEFAULT_ADMIN_ENABLED", "false")
 os.environ.setdefault("PRISM_AUTH_DB_URL", os.path.join(tempfile.mkdtemp(prefix="prism-tests-"), "security.db"))
 
 from datetime import datetime, timedelta, timezone

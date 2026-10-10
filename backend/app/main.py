@@ -11,7 +11,10 @@ whole prototype runs from one process.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -26,6 +29,9 @@ from app.api.auth_routes import router as auth_router
 from app.api.siem_routes import router as siem_router
 from app.api.ocsf_routes import router as ocsf_router
 from app.api.admin_routes import router as admin_router
+from app.api.ops_routes import router as ops_router
+from app.core.metrics import MetricsMiddleware, RequestMetrics
+from app.services.backup import create_backup
 from app.core.auth import AuthMiddleware, SecurityHeadersMiddleware, resolve_token
 from app.core.db import is_postgres, postgres_host
 from app.core.local_only import LocalOnlyMiddleware, is_loopback
@@ -49,6 +55,32 @@ Every result is labelled with how it was derived:
 * **inferred**   - produced by the lateral-movement rule engine
 * **predicted**  - graph-based next-target scoring, never a statement of fact
 """
+
+
+async def _maintenance(state: SocState) -> None:
+    """Hourly retention clean-up and scheduled backups, off the request path."""
+    logger = get_logger("app.maintenance")
+    settings = state.settings
+    last_backup = time.monotonic()
+    last_purge = 0.0
+    while True:
+        try:
+            now = time.monotonic()
+            if settings.storage.retention_days > 0 and now - last_purge >= 3600:
+                last_purge = now
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=settings.storage.retention_days)).isoformat()
+                events, investigations = await asyncio.to_thread(state.store.purge_older_than, cutoff)
+                if events or investigations:
+                    logger.info("retention clean-up", extra={"events": events, "investigations": investigations})
+            interval = settings.backup.interval_hours * 3600
+            if interval > 0 and now - last_backup >= interval:
+                last_backup = now
+                await asyncio.to_thread(create_backup, settings, "scheduled")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - maintenance must keep running
+            logger.warning("maintenance task failed", extra={"error": str(exc)})
+        await asyncio.sleep(60)
 
 
 @asynccontextmanager
@@ -76,6 +108,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.simulation_autostart:
         await state.start_simulation(restart=True)
     state.start_live_loop()
+    maintenance = asyncio.create_task(_maintenance(state))
 
     if settings.local_only and settings.syslog.host not in {"127.0.0.1", "::1", "localhost"}:
         logger.warning("local-only mode: syslog receiver pinned to 127.0.0.1", extra={"requested": settings.syslog.host})
@@ -94,6 +127,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await syslog.stop()
         if getattr(app.state, "security", None) is not None:
             app.state.security.close()
+        maintenance.cancel()
         await investigations.shutdown()
         state.shutdown()
 
@@ -134,18 +168,26 @@ def create_app() -> FastAPI:
     app.state.auth_cookie_max_age = settings.auth.cookie_max_age_seconds
     app.state.access_code_enabled = settings.auth.access_code_enabled
     app.state.security = SecurityStore(settings.auth) if settings.auth.enabled else None
+    if app.state.security is not None and app.state.security.ensure_default_admin():
+        get_logger("app.main").warning(
+            "fresh installation: created the default admin account; its first sign-in must set a new password",
+            extra={"username": settings.auth.default_admin_username},
+        )
     if settings.auth.enabled:
         app.add_middleware(AuthMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
+    app.state.request_metrics = RequestMetrics()
+    app.add_middleware(MetricsMiddleware, metrics=app.state.request_metrics)
     # Added last so it runs first: other machines are refused before anything else.
     if settings.local_only:
-        app.add_middleware(LocalOnlyMiddleware)
+        app.add_middleware(LocalOnlyMiddleware, local_networks=settings.local_networks)
 
     app.include_router(router)
     app.include_router(agent_router)
     app.include_router(live_router)
     app.include_router(auth_router)
     app.include_router(admin_router)
+    app.include_router(ops_router)
     app.include_router(siem_router)
     app.include_router(ocsf_router)
 

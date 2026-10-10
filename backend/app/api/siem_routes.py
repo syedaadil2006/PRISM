@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.auth import is_valid
 from app.services.live_feed import stream_name
+from app.services.soc_state import IngestBusy
 
 router = APIRouter(prefix="/services/collector", tags=["siem"])
 
@@ -103,7 +104,11 @@ async def hec_event(request: Request) -> JSONResponse:
     accepted = duplicates = rejected = 0
     errors: list[str] = []
     for stream, records in batches.items():
-        result = await state.ingest_live(records, stream)
+        try:
+            result = await state.ingest_live(records, stream)
+        except IngestBusy:
+            # Splunk's own "server is busy" answer, so forwarders back off and retry.
+            return _hec(9, "Server is busy", status=503, prism={"accepted": accepted, "queued": state.pending_count})
         accepted += result.accepted
         duplicates += result.duplicates
         rejected += result.rejected

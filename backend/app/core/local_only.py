@@ -47,12 +47,26 @@ def target_is_local(host_port: str) -> bool:
     return is_loopback(host or host_port)
 
 
+def in_networks(host: str | None, networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    if not host or not networks:
+        return False
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
+
+
 class LocalOnlyMiddleware(BaseHTTPMiddleware):
     """Refuses every request that does not come from this computer."""
 
+    def __init__(self, app, local_networks: list[str] | None = None) -> None:  # noqa: ANN001
+        super().__init__(app)
+        self.networks = [ipaddress.ip_network(n, strict=False) for n in (local_networks or [])]
+
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001, ANN201
         client = request.client.host if request.client else None
-        if not is_loopback(client):
+        if not is_loopback(client) and not in_networks(client, self.networks):
             return JSONResponse(
                 status_code=403,
                 content={"detail": "PRISM is in local-only mode: it only accepts requests from this computer."},

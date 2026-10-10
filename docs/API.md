@@ -404,6 +404,17 @@ the API answers `401` with `WWW-Authenticate: Bearer`.
 Roles: `viewer` may read; `analyst` may also use every other `POST`; `admin` may also use `/api/admin/*`,
 `POST /api/logs/reset` and `POST /api/live/start`. A role that is too low gets `403`.
 
+## Operations
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/metrics` | Prometheus text format: `prism_http_requests_total`, `prism_http_request_seconds` histogram, `prism_events`, `prism_attack_chains`, `prism_ingest_queue`, `prism_analysis_runs_total`, ... (any signed-in role) |
+| `GET` | `/api/admin/backups` | Backups on this computer, newest first (admin) |
+| `POST` | `/api/admin/backups` | Back up the databases now; returns the manifest with checksums (admin) |
+
+`POST /api/live/events` answers `429` with `Retry-After` when more than `PRISM_LIVE_MAX_PENDING` events are
+waiting for analysis; `GET /api/live/status` shows `queued` and `max_queued`.
+
 ## Admin (admin role)
 
 | Method | Path | Purpose |

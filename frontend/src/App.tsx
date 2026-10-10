@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import { ChangePassword } from "./components/ChangePassword";
 import { SignIn } from "./components/SignIn";
 import { TopNav } from "./components/TopNav";
 import { api, type AuthStatus } from "./lib/api";
@@ -52,6 +53,7 @@ export default function App() {
 
   if (!auth) return <div className="p-8 text-sm text-slate-500">Connecting to PRISM...</div>;
   if (auth.enabled && !auth.authenticated) return <SignIn status={auth} onSignedIn={() => void check()} />;
+  if (auth.password_change_required) return <ChangePassword status={auth} onDone={() => void check()} />;
   return <Shell auth={auth} onSignedOut={() => void check()} />;
 }
 

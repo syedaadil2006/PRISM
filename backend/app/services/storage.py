@@ -161,6 +161,21 @@ class Store:
         else:
             self._db.execute("DELETE FROM investigations")
 
+    def purge_older_than(self, cutoff_iso: str) -> tuple[int, int]:
+        """Delete stored events and investigations older than ``cutoff_iso`` (UTC ISO time).
+
+        Returns (events, investigations) deleted.
+        """
+        if self._db is None:
+            return 0, 0
+        events = int(self._db.execute("SELECT COUNT(*) FROM events WHERE timestamp < ?", (cutoff_iso,))[0][0])
+        investigations = int(
+            self._db.execute("SELECT COUNT(*) FROM investigations WHERE created_at < ?", (cutoff_iso,))[0][0]
+        )
+        self._db.execute("DELETE FROM events WHERE timestamp < ?", (cutoff_iso,))
+        self._db.execute("DELETE FROM investigations WHERE created_at < ?", (cutoff_iso,))
+        return events, investigations
+
     # ---------------------------------------------------------------- meta --
 
     def get_meta(self, key: str, default: str | None = None) -> str | None:

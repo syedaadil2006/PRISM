@@ -202,11 +202,48 @@ Then open **http://localhost:8000**.
 ### Docker
 
 ```bash
-docker compose up --build
+docker compose up -d --build
+docker compose exec prism cat /data/.prism_token
 ```
 
-UI on http://localhost:5173, API on http://localhost:8000. To also run the
-optional Neo4j mirror: `docker compose --profile neo4j up --build`.
+Then open http://localhost:8000 and sign in as `Admin` / `Admin@123` (you will be asked to choose a new password).
+The Docker files are new in this version and have not been build-tested yet; the one-click launcher is the
+tested way to run PRISM.
+* One container serves the API and the dashboard. It runs as an unprivileged user with a read-only file
+  system, and the port is published on 127.0.0.1 only.
+* Databases, the access code, backups and an optional HTTPS certificate live in the `prism-data` volume. Put
+  `prism.crt` and `prism.key` in `/data/tls` to serve HTTPS.
+* `PRISM_DATASET=botsv1 docker compose up -d` analyses the BOTS data instead of the demo.
+* For the optional Neo4j mirror, set `PRISM_NEO4J_PASSWORD` and run
+  `docker compose --profile neo4j up -d --build`.
+
+### Signing in
+
+**Default login (first start):**
+
+| User name | Password |
+|---|---|
+| `Admin` | `Admin@123` |
+
+* A new installation creates this admin account the first time PRISM starts.
+* The **first sign-in asks you to choose a new password** of at least 12 characters, and nothing else works until
+  you do. So the published default only gets you as far as setting your own password.
+* If you upgraded from an earlier version that already had accounts, the default is not created.
+
+**Access code:** another way to sign in, used by the launcher and scripts.
+* `Start PRISM.bat` opens the dashboard already signed in with it. Nothing to type.
+* Otherwise, open the **Access code** tab and paste the code. PRISM creates a random code on first start, so
+  every installation has a different one and it is never published. Read it with:
+  * on the computer running PRISM: `Get-Content backend\data\.prism_token`
+  * with Docker: `docker compose exec prism cat /data/.prism_token`
+* The access code has admin rights. To use a code of your own choosing, set `PRISM_AUTH_TOKEN`.
+
+**Team accounts:** on the **Admin** page, create an account for each person, as viewer, analyst or admin.
+* The audit log then records each person's actions under their own name.
+* Passwords an admin sets or resets are temporary: the user picks their own at the next sign-in.
+* Optional settings:
+  * `PRISM_AUTH_ACCESS_CODE_ENABLED=false` allows named accounts only.
+  * `PRISM_AUTH_DEFAULT_ADMIN_ENABLED=false` skips the default admin on new installations.
 
 ### Tests
 
@@ -580,6 +617,43 @@ major SIEM vendors (`backend/app/ocsf.py`):
 
 ---
 
+## Scale, monitoring and backups
+
+* **Ingestion is a queue; analysis runs in the background.**
+  * Live events are parsed, de-duplicated and saved to storage before the sender gets its answer, so a
+    restart loses nothing.
+  * Re-analysis runs in a worker thread, so the dashboard and API keep answering from the previous result
+    meanwhile.
+  * When more than `PRISM_LIVE_MAX_PENDING` events (50,000) are waiting:
+    * the live API answers **429** with `Retry-After`;
+    * the Splunk HEC endpoint answers `503`, code 9 ("server is busy");
+    * syslog counts what it had to drop.
+* **Metrics.** `GET /api/metrics` gives Prometheus-format counters: requests by route and status, a latency
+  histogram, events, chains, queue size, analysis runs and duration. Scrape it with
+  `Authorization: Bearer <access code>`.
+* **Backups.**
+  * PRISM backs up its SQLite databases every 24 hours (`PRISM_BACKUP_INTERVAL_HOURS`) into
+    `backend/data/backups/` and keeps the newest 7. An admin can also start one with
+    `POST /api/admin/backups`.
+  * Backups are consistent while PRISM runs and carry SHA-256 checksums.
+  * To restore, stop PRISM and run `python scripts/restore_backup.py <name>`. It refuses a damaged backup or
+    a running PRISM, and keeps the replaced files as `*.before-restore`.
+* **Retention.** `PRISM_STORAGE_RETENTION_DAYS` deletes stored events and investigations older than that many
+  days. The default 0 keeps everything. The audit log is never trimmed.
+* **Load test.** `python scripts/load_test.py --events 40000 --senders 4 --attack` sends realistic office
+  activity, with the demo attack hidden in it, to a running PRISM. It reports the ingestion rate, API latency
+  under load and the time for analysis to catch up.
+
+  Measured on a laptop with 40,000 events from 4 senders:
+  * about 12,700 events/s accepted;
+  * analysis caught up 6 s after sending started;
+  * API median latency 30 ms;
+  * the attack was still found among the noise.
+
+  The previous version, under the same load, answered the dashboard in a median of 3.1 s.
+
+---
+
 ## Configuration
 
 | Setting | Default | Meaning |
@@ -594,6 +668,10 @@ major SIEM vendors (`backend/app/ocsf.py`):
 | `PRISM_AUTH_ACCESS_CODE_ENABLED` | `true` | `false` allows named accounts only |
 | `PRISM_AUTH_SESSION_HOURS` | `12` | Sessions end this long after sign-in |
 | `PRISM_AUTH_MAX_FAILED_LOGINS` / `_LOCKOUT_MINUTES` | `5` / `15` | Sign-in lockout |
+| `PRISM_LIVE_MAX_PENDING` | `50000` | Events waiting for analysis before senders get HTTP 429 |
+| `PRISM_STORAGE_RETENTION_DAYS` | `0` | Delete stored events and investigations older than this (0 = keep) |
+| `PRISM_BACKUP_INTERVAL_HOURS` / `PRISM_BACKUP_KEEP` | `24` / `7` | Automatic backups and how many to keep |
+| `PRISM_LOCAL_NETWORKS` | `[]` | Extra networks treated as this computer (Docker's internal network) |
 | `PRISM_TLS_CERT_FILE` / `PRISM_TLS_KEY_FILE` | `backend/data/tls/prism.crt` / `.key` | HTTPS certificate used by the launcher |
 | `PRISM_SYSLOG_ENABLED` / `_HOST` / `_PORT` | `false` / `127.0.0.1` / `5514` | Syslog receiver |
 | `PRISM_FORWARD_WEBHOOK_URL` | *(empty)* | Send attack-chain alerts to a webhook |

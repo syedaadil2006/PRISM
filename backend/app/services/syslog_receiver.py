@@ -113,6 +113,7 @@ class SyslogReceiver:
         self.settings = state.settings.syslog
         self.received = 0
         self.parsed = 0
+        self.dropped = 0
         self._pending: dict[str, list[dict[str, Any]]] = {}
         self._servers: list[Any] = []
         self._flusher: asyncio.Task[None] | None = None
@@ -127,9 +128,15 @@ class SyslogReceiver:
         self._pending.setdefault("syslog-" + host, []).append(record)
 
     async def flush(self) -> None:
+        from app.services.soc_state import IngestBusy
+
         pending, self._pending = self._pending, {}
         for stream, records in pending.items():
-            await self.state.ingest_live(records, stream)
+            try:
+                await self.state.ingest_live(records, stream)
+            except IngestBusy:
+                # Syslog has no way to ask the sender to wait: count what is dropped.
+                self.dropped += len(records)
 
     async def _flush_loop(self) -> None:
         while True:
@@ -182,4 +189,5 @@ class SyslogReceiver:
             "protocols": [p for p, on in (("udp", self.settings.udp), ("tcp", self.settings.tcp)) if on],
             "messages_received": self.received,
             "messages_understood": self.parsed,
+            "messages_dropped_busy": self.dropped,
         }

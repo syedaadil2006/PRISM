@@ -88,6 +88,11 @@ export function Admin({ auth }: { auth: AuthStatus }) {
                     <td className="px-3 py-2 font-mono">
                       {account.username}
                       {self && <span className="ml-1.5 text-slate-500">(you)</span>}
+                      {account.must_change_password && (
+                        <span className="ml-1.5 text-amber-300" title="Must choose a new password at next sign-in">
+                          (password change pending)
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <select

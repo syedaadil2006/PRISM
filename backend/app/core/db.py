@@ -67,6 +67,8 @@ class Database:
             # isolation_level=None: autocommit, transactions only where asked for.
             self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
             self._conn.execute("PRAGMA journal_mode=WAL")
+            # Safe with WAL: a power cut can lose the last commits, never corrupt the file.
+            self._conn.execute("PRAGMA synchronous=NORMAL")
 
     def _sql(self, sql: str) -> str:
         return sql.replace("?", "%s") if self.dialect == "postgres" else sql
@@ -83,7 +85,8 @@ class Database:
     def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
         if not rows:
             return
-        with self._lock:
+        # One transaction for the whole batch: committing row by row costs a disk flush per row.
+        with self.transaction():
             cursor = self._conn.cursor()
             try:
                 cursor.executemany(self._sql(sql), [tuple(r) for r in rows])

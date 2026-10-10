@@ -39,3 +39,4 @@ backend/data/.prism_token
 # Accounts, sessions and audit log; HTTPS certificate and private key
 backend/data/security.db*
 backend/data/tls/
+backend/data/backups/

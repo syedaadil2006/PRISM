@@ -8,6 +8,10 @@
   so a copy of the database cannot be used to sign in. They expire after
   ``session_hours`` and are revoked when the account is disabled, deleted, its
   role changes or its password changes.
+* **First start.** A fresh installation creates the documented default admin
+  (``admin`` / ``Admin@123``), flagged so that its first sign-in must choose a
+  new password; until then every other request is refused. An admin resetting
+  someone's password sets the same flag.
 * **Failed sign-ins** are limited per account and per address
   (``max_failed_logins`` within ``lockout_minutes``).
 * **The audit log** is append-only and hash-chained: every entry stores the
@@ -84,6 +88,8 @@ class Principal:
     username: str
     role: str
     kind: str  # "user" (named account) or "access-code" (shared code: launcher, scripts)
+    #: The password must be changed before anything else is allowed.
+    must_change_password: bool = False
 
     def can(self, role: str) -> bool:
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK[role]
@@ -137,8 +143,30 @@ class SecurityStore:
         self.settings = settings
         self.db = Database(settings.db_url)
         self.db.script(SCHEMA)
+        self._migrate()
         self._failures: dict[str, list[float]] = {}
         self._failures_lock = threading.Lock()
+
+    def _migrate(self) -> None:
+        """Columns added after the first release (databases created earlier lack them)."""
+        try:
+            self.db.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+        except Exception:  # noqa: BLE001 - the column already exists
+            pass
+
+    def ensure_default_admin(self) -> bool:
+        """On a fresh installation, create the default admin. Returns True if it was created."""
+        if not self.settings.default_admin_enabled or self.has_users():
+            return False
+        username = self.settings.default_admin_username.strip().lower()
+        self.db.execute(
+            "INSERT INTO users (username, password_hash, role, disabled, created_at, must_change_password) "
+            "VALUES (?, ?, 'admin', 0, ?, 1)",
+            (username, hash_password(self.settings.default_admin_password), _iso(_now())),
+        )
+        self.audit("system", "create default admin", target=username,
+                   detail={"must_change_password": True})
+        return True
 
     def close(self) -> None:
         self.db.close()
@@ -152,11 +180,17 @@ class SecurityStore:
             raise AccountError("The password must not be the user name.")
 
     def list_users(self) -> list[dict[str, object]]:
-        rows = self.db.execute("SELECT username, role, disabled, created_at, last_login FROM users ORDER BY username")
+        rows = self.db.execute(
+            "SELECT username, role, disabled, created_at, last_login, must_change_password FROM users ORDER BY username"
+        )
         return [
-            {"username": u, "role": role, "disabled": bool(disabled), "created_at": created, "last_login": last}
-            for u, role, disabled, created, last in rows
+            {"username": u, "role": role, "disabled": bool(disabled), "created_at": created, "last_login": last,
+             "must_change_password": bool(change)}
+            for u, role, disabled, created, last, change in rows
         ]
+
+    def has_users(self) -> bool:
+        return bool(self.db.execute("SELECT 1 FROM users LIMIT 1"))
 
     def get_user(self, username: str) -> dict[str, object] | None:
         return next((u for u in self.list_users() if u["username"] == username), None)
@@ -179,7 +213,8 @@ class SecurityStore:
         return self.get_user(username) or {}
 
     def update_user(
-        self, username: str, *, role: str | None = None, disabled: bool | None = None, password: str | None = None
+        self, username: str, *, role: str | None = None, disabled: bool | None = None, password: str | None = None,
+        require_change: bool = False,
     ) -> dict[str, object]:
         user = self.get_user(username)
         if not user:
@@ -192,7 +227,10 @@ class SecurityStore:
             self.db.execute("UPDATE users SET disabled = ? WHERE username = ?", (int(disabled), username))
         if password is not None:
             self._validate_password(username, password)
-            self.db.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(password), username))
+            self.db.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = ? WHERE username = ?",
+                (hash_password(password), int(require_change), username),
+            )
         if role is not None or disabled or password is not None:
             self.revoke_sessions(username)
         return self.get_user(username) or {}
@@ -205,15 +243,17 @@ class SecurityStore:
 
     def authenticate(self, username: str, password: str) -> Principal | None:
         username = username.strip().lower()
-        rows = self.db.execute("SELECT password_hash, role, disabled FROM users WHERE username = ?", (username,))
+        rows = self.db.execute(
+            "SELECT password_hash, role, disabled, must_change_password FROM users WHERE username = ?", (username,)
+        )
         if not rows:
             check_password(password, hash_password("timing-equaliser"))  # same cost as a real check
             return None
-        stored, role, disabled = rows[0]
+        stored, role, disabled, must_change = rows[0]
         if disabled or not check_password(password, stored):
             return None
         self.db.execute("UPDATE users SET last_login = ? WHERE username = ?", (_iso(_now()), username))
-        return Principal(username, role, "user")
+        return Principal(username, role, "user", bool(must_change))
 
     # ------------------------------------------------------------ sessions --
 
@@ -231,16 +271,16 @@ class SecurityStore:
         if not cookie or not cookie.startswith(self.SESSION_PREFIX):
             return None
         rows = self.db.execute(
-            "SELECT s.expires_at, u.username, u.role, u.disabled FROM sessions s "
+            "SELECT s.expires_at, u.username, u.role, u.disabled, u.must_change_password FROM sessions s "
             "JOIN users u ON u.username = s.username WHERE s.session_hash = ?",
             (_session_hash(cookie[len(self.SESSION_PREFIX):]),),
         )
         if not rows:
             return None
-        expires_at, username, role, disabled = rows[0]
+        expires_at, username, role, disabled, must_change = rows[0]
         if disabled or datetime.fromisoformat(expires_at) <= _now():
             return None
-        return Principal(username, role, "user")
+        return Principal(username, role, "user", bool(must_change))
 
     def end_session(self, cookie: str | None) -> None:
         if cookie and cookie.startswith(self.SESSION_PREFIX):

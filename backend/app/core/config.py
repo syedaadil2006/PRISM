@@ -156,6 +156,8 @@ class LiveSettings(BaseSettings):
     max_events: int = 50_000
     #: Largest number of records accepted in one HTTP request.
     max_batch: int = 5_000
+    #: Events waiting for analysis before senders are told to retry (HTTP 429). 0 = no limit.
+    max_pending: int = 50_000
 
 
 class SyslogSettings(BaseSettings):
@@ -210,6 +212,11 @@ class AuthSettings(BaseSettings):
     max_failed_logins: int = 5
     lockout_minutes: int = 15
     min_password_length: int = 12
+    #: A fresh installation (no accounts yet) creates this admin on first start.
+    #: Its first sign-in must choose a new password before anything else works.
+    default_admin_enabled: bool = True
+    default_admin_username: str = "admin"
+    default_admin_password: str = "Admin@123"
     cookie_max_age_seconds: int = 7 * 24 * 3600
 
 
@@ -222,6 +229,20 @@ class StorageSettings(BaseSettings):
     path: Path = BACKEND_ROOT / "data" / "prism.db"
     #: Optional postgresql://user:password@host:5432/db; empty means the SQLite file above.
     url: str = ""
+    #: Stored events and investigations older than this are deleted (0 keeps everything).
+    retention_days: int = 0
+
+
+class BackupSettings(BaseSettings):
+    """Automatic backups of PRISM's databases (see app/services/backup.py)."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_BACKUP_", extra="ignore")
+
+    dir: Path = BACKEND_ROOT / "data" / "backups"
+    #: Hours between automatic backups (0 = only when asked for).
+    interval_hours: float = 24.0
+    #: Newest backups kept; older ones are deleted.
+    keep: int = 7
 
 
 class Neo4jSettings(BaseSettings):
@@ -251,6 +272,10 @@ class Settings(BaseSettings):
     #: Edge / local-only mode (see app/core/local_only.py): data never leaves
     #: this computer. On by default; only PRISM_LOCAL_ONLY=false turns it off.
     local_only: bool = True
+    #: Extra networks treated as "this computer" in local-only mode, as CIDRs.
+    #: Only for containers: Docker delivers the host's own requests from its
+    #: bridge network. Publish the port on 127.0.0.1 so nothing else can reach it.
+    local_networks: list[str] = []
     version: str = "0.1.0"
     log_level: str = "INFO"
 
@@ -318,6 +343,7 @@ class Settings(BaseSettings):
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
     live: LiveSettings = Field(default_factory=LiveSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    backup: BackupSettings = Field(default_factory=BackupSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     syslog: SyslogSettings = Field(default_factory=SyslogSettings)
     forward: ForwardSettings = Field(default_factory=ForwardSettings)

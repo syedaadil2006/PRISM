@@ -54,6 +54,10 @@ class LiveStatus(BaseModel):
     events_per_minute: int
     last_received_at: datetime | None = None
     pending_analysis: bool = False
+    #: Events received and stored but not yet analysed, and the limit before
+    #: senders are asked to slow down (HTTP 429).
+    queued: int = 0
+    max_queued: int = 0
     last_analysis_at: datetime | None = None
     last_analysis_ms: float | None = None
     streams: list[LiveStreamView] = []
