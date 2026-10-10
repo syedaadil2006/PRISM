@@ -207,9 +207,23 @@ def parse_windows_security(record: LogRecord, ctx: ParseContext) -> NormalizedEv
         tags.append("service-install")
         process = process or service_file
     elif code == "4648":
+        # "A logon was attempted using explicit credentials" is written on the
+        # computer the sign-in comes FROM; the target server is the destination
+        # and the account named is the one whose credentials were used.
         action = Action.NETWORK_LOGON
         severity = Severity.LOW
         tags.append("explicit-credentials")
+        target_server = _clean_host(_get(record, "TargetServerName"))
+        if target_server and target_server.upper() not in {"LOCALHOST", (destination_host or "").upper()}:
+            source_host, destination_host = destination_host, target_server
+        else:
+            source_host = destination_host  # a local run-as: no movement
+        acting = _clean_user(_get(record, "SubjectUserName"))
+        used = _clean_user(_get(record, "TargetUserName"))
+        if acting and used and acting.lower() != used.lower():
+            tags.append("credential-switch:" + acting)
+            tags.append("finding:{} used the credentials of {} to reach {}".format(
+                acting, used, destination_host or "a server"))
     else:
         # 4624 and anything else describing a successful logon.
         action = _LOGON_TYPE_ACTION.get(logon_type or "", Action.LOGIN_SUCCESS)

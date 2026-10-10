@@ -38,7 +38,7 @@ for day in (1, 2):
             event_id = r.get("EventID")
             host = (r.get("Hostname") or "").split(".")[0].upper()
             if channel == "security" and event_id in SECURITY:
-                out = {k: r.get(k) for k in ("TargetUserName", "SubjectUserName", "LogonType", "IpAddress",
+                out = {k: r.get(k) for k in ("TargetUserName", "SubjectUserName", "LogonType", "IpAddress", "TargetServerName",
                                              "WorkstationName", "ShareName", "ProcessName", "Status")
                        if r.get(k) is not None}
                 out.update({"RecordId": f"apt29-d{day}-sec-{r.get('RecordNumber')}-{host}", "EventID": str(event_id),

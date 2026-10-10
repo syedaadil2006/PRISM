@@ -21,6 +21,7 @@ import networkx as nx
 from app.core.config import Settings
 from app.engine import mitre
 from app.engine.lateral import detect_lateral_movement
+from app.models.analysis import LateralMovement
 from app.engine.prediction import build_context, predict_next_targets
 from app.graph.builder import connectivity_scores, host_subgraph
 from app.models.analysis import (
@@ -57,15 +58,32 @@ _FALLBACK_TACTIC: dict[str, tuple[str, str]] = {
 
 
 def _components(
-    events: list[NormalizedEvent], correlations: list[Correlation]
+    events: list[NormalizedEvent],
+    correlations: list[Correlation],
+    movements: list[LateralMovement] | None = None,
 ) -> list[list[NormalizedEvent]]:
-    """Connected components of the correlation graph, newest-activity first."""
+    """Connected components of the correlation graph, newest-activity first.
+
+    A sign-in made with another named account's credentials, which the
+    lateral-movement rule tied to suspicious activity on the source computer,
+    joins that chain even though a network logon on its own is not notable.
+    """
     notable = {e.event_id: e for e in events if e.is_notable}
+    by_id = {e.event_id: e for e in events}
     graph = nx.Graph()
     graph.add_nodes_from(notable)
     for link in correlations:
         if link.source_event_id in notable and link.target_event_id in notable:
             graph.add_edge(link.source_event_id, link.target_event_id)
+    for move in movements or []:
+        support = move.supporting_event_id
+        event = by_id.get(move.event_id)
+        # Only deliberate use of another named account's credentials (Windows
+        # 4648) is promoted; routine and machine-account sign-ins are not.
+        switched = event is not None and event.user and any(t.startswith("credential-switch:") for t in event.tags)
+        if support in notable and switched and not event.suppressed:
+            notable[move.event_id] = event
+            graph.add_edge(support, move.event_id)
 
     groups: list[list[NormalizedEvent]] = []
     for component in nx.connected_components(graph):
@@ -313,7 +331,8 @@ def build_chains(
 
     chains: list[AttackChain] = []
     index = 0
-    for members in _components(events, correlations):
+    movements = detect_lateral_movement(events, correlations, settings.lateral, settings.correlation)
+    for members in _components(events, correlations, movements):
         if len(members) < settings.correlation.min_chain_events:
             continue
         # A cluster of logons alone is not an attack: someone using their own
@@ -347,6 +366,7 @@ def build_chains(
             connectivity=connectivity,
             known_hosts=known_hosts,
             attack_chain_id=chain_id,
+            all_events=events,
         )
         predictions = predict_next_targets(inventory, projection, ctx, settings.prediction)
 

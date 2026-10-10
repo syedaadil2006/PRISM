@@ -15,6 +15,10 @@ they think is wrong.
 
 from __future__ import annotations
 
+import bisect
+from collections import defaultdict
+from datetime import timedelta
+
 from app.core.config import CorrelationSettings, LateralMovementSettings
 from app.engine.correlation import score_pair
 from app.models.analysis import (
@@ -57,20 +61,24 @@ def detect_lateral_movement(
 
     detections: list[LateralMovement] = []
 
+    # Suspicious events per host, in time order, so each candidate looks up
+    # only its own window instead of scanning every event.
+    suspicious_by_host: dict[str, list[NormalizedEvent]] = defaultdict(list)
+    for event in sorted((e for e in events if e.suspicious), key=lambda e: e.timestamp):
+        for host in event.hosts():
+            suspicious_by_host[host].append(event)
+    times_by_host = {h: [e.timestamp for e in evs] for h, evs in suspicious_by_host.items()}
+
     for movement in _movement_candidates(events, settings):
         source = movement.source_host
         assert source is not None  # guaranteed by _movement_candidates
 
         # Clause 1 + 2: prior suspicious activity on the host being moved *from*.
-        prior = [
-            e
-            for e in events
-            if e.suspicious
-            and e.event_id != movement.event_id
-            and e.timestamp <= movement.timestamp
-            and (movement.timestamp - e.timestamp).total_seconds() <= settings.window_seconds
-            and source in e.hosts()
-        ]
+        on_source = suspicious_by_host.get(source, [])
+        times = times_by_host.get(source, [])
+        lo = bisect.bisect_left(times, movement.timestamp - timedelta(seconds=settings.window_seconds))
+        hi = bisect.bisect_right(times, movement.timestamp)
+        prior = [e for e in on_source[lo:hi] if e.event_id != movement.event_id]
         if not prior:
             continue
 
@@ -104,6 +112,11 @@ def detect_lateral_movement(
             "{} was then used as the source of {} activity".format(source, movement.action.value),
             "The activity reached {}".format(movement.destination_host),
         ]
+        switched = next((t.split(":", 1)[1] for t in movement.tags if t.startswith("credential-switch:")), None)
+        if switched:
+            rule_evaluation.append(
+                "Credentials switched: {} used the account {} for this sign-in".format(switched, movement.user)
+            )
         if same_account:
             rule_evaluation.append("The same account ({}) is involved in both events".format(movement.user))
         else:
@@ -129,6 +142,7 @@ def detect_lateral_movement(
                 confidence=confidence_from_score(best_link.score),
                 assurance=Assurance.INFERRED,
                 rule_evaluation=rule_evaluation,
+                supporting_event_id=best_support.event_id,
                 explanation=(
                     "{} moved from {} to {} using {}. "
                     "{} was already associated with suspicious activity, so this "

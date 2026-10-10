@@ -113,6 +113,8 @@ class LateralMovement(BaseModel):
     #: The rule clauses that fired, in the order the rule evaluates them.
     rule_evaluation: list[str] = Field(default_factory=list)
     explanation: str = ""
+    #: The suspicious event on the source host that the movement is tied to.
+    supporting_event_id: str | None = None
 
 
 class PredictionFactor(BaseModel):

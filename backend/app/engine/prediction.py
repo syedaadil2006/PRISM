@@ -43,6 +43,9 @@ class PredictionContext:
     touched_hosts: dict[str, list[str]] = field(default_factory=dict)
     #: Normalised 0-1 graph connectivity per host name.
     connectivity: dict[str, float] = field(default_factory=dict)
+    #: Hosts each chain account has successfully signed in to, learned from the
+    #: logs; used only for accounts the inventory has no entitlements for.
+    observed_access: dict[str, dict[str, int]] = field(default_factory=dict)
     attack_chain_id: str | None = None
 
 
@@ -54,6 +57,7 @@ def build_context(
     connectivity: dict[str, float],
     known_hosts: list[str],
     attack_chain_id: str | None = None,
+    all_events: list[NormalizedEvent] | None = None,
 ) -> PredictionContext:
     """Summarise what the chain has recently reached for, with evidence text."""
     touched: dict[str, list[str]] = {}
@@ -84,7 +88,22 @@ def build_context(
             if label in upper_hosts:
                 note(label, "name resolved from " + str(event.source_host))
 
+    lowered_users = {u.lower() for u in users}
+    observed: dict[str, dict[str, int]] = {}
+    for event in all_events or []:
+        if (
+            event.event_type is EventType.AUTHENTICATION
+            and event.outcome != "failure"
+            and event.user
+            and event.user.lower() in lowered_users
+            and event.destination_host
+            and event.destination_host != event.source_host
+        ):
+            hosts = observed.setdefault(event.user.lower(), {})
+            hosts[event.destination_host.upper()] = hosts.get(event.destination_host.upper(), 0) + 1
+
     return PredictionContext(
+        observed_access=observed,
         compromised_hosts={h.upper() for h in compromised_hosts},
         current_host=current_host,
         users={u.lower() for u in users},
@@ -109,6 +128,23 @@ def _user_access_factor(
             points=settings.weight_user_access,
             max_points=settings.weight_user_access,
             detail="Compromised account {} is entitled to {}".format(", ".join(entitled), host_name),
+        )
+    # No entitlement data for an account: what its credentials have already
+    # opened in the logs is the best evidence of where they will work.
+    in_inventory = {u.name.lower() for u in inventory.users}
+    learned = sorted(
+        (user, hosts[host_name.upper()])
+        for user, hosts in ctx.observed_access.items()
+        if user not in in_inventory and host_name.upper() in hosts
+    )
+    if learned:
+        return PredictionFactor(
+            name="User Access",
+            points=settings.weight_user_access,
+            max_points=settings.weight_user_access,
+            detail="Compromised account {} has signed in to {} before ({} sign-in(s) in the logs; "
+            "no entitlement data in the inventory)".format(
+                ", ".join(u for u, _ in learned), host_name, sum(n for _, n in learned)),
         )
     return PredictionFactor(
         name="User Access",

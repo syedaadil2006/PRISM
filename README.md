@@ -632,10 +632,22 @@ computers over 2 days, with real credential theft and lateral movement.
 * **Next-target prediction:** at each of the attacker's 3 real moves, PRISM saw only the events before the
   move. It ranked the actual target first once (the domain controller) and in its top 3 every time. With 4
   computers, top-3 is guaranteed, and top-1 at 1 of 3 is no better than chance.
-* **Known gaps it exposed (not tuned away):**
-  * Without account permissions in the network map, PRISM leans towards the domain controller.
-  * On day 2 the attacker switched to another stolen account, and PRISM's single-account lateral-movement
-    rule did not link that move.
+* **Gaps it exposed, and what changed:**
+  * **Credential switching.** On day 2 the attacker used another stolen account. The Windows event that
+    records this (4648, explicit credentials) is now read correctly: it is logged on the source computer and
+    names the target server. A sign-in made this way after attacker activity on the source computer now joins
+    the attack chain. PRISM now reconstructs day 2's move to the domain controller.
+  * **Learned access.** When the network map has no account permissions, prediction uses the computers each
+    account has actually signed in to.
+  * Results on APT29 after these changes: top-1 2 of 3, up from 1 of 3. APT29 is now development data, so
+    this gain is not independent evidence.
+* **Independent check** on two OTRF Covenant recordings (WMI and PowerShell remoting), never used during
+  development: 0 of 2 moves detected and 0 of 2 predicted top-1, both before and after the changes.
+  * In one recording PRISM sees nothing suspicious on the source computer before the move.
+  * In the other, the sign-in on the target has no source address and the account did not change.
+  * Six other OTRF recordings could not be downloaded on the test machine because its antivirus blocked them.
+  * So the changes fix what they were built for but do not yet generalise. Using Sysmon network connections
+    to recover the source of such sign-ins is the next candidate.
 
 ---
 

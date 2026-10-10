@@ -294,3 +294,16 @@ def test_modifiers_wrap_values_ending_in_a_backslash():
     assert _value_matcher("C:" + bs + "Users" + bs, ["startswith"])(path)
     assert _value_matcher(bs, ["contains"])(path) and not _value_matcher(bs, ["contains"])("x.exe")
     assert _value_matcher(bs + "x.exe", ["endswith"])(path)
+
+
+def test_explicit_credentials_4648_is_read_from_the_source_computer():
+    """4648 is logged on the computer the sign-in comes FROM and names the target server."""
+    event = _parse([{"RecordId": "c-1", "EventID": "4648", "TimeCreated": "2026-09-30T10:00:00Z", "Computer": "UTICA",
+                     "SubjectUserName": "dschrute", "TargetUserName": "mscott", "TargetServerName": "NEWYORK"}])[0]
+    assert (event.source_host, event.destination_host, event.user) == ("UTICA", "NEWYORK", "mscott")
+    assert "credential-switch:dschrute" in event.tags
+    assert any("dschrute used the credentials of mscott to reach NEWYORK" in t for t in event.tags)
+    local = _parse([{"RecordId": "c-2", "EventID": "4648", "TimeCreated": "2026-09-30T10:00:00Z", "Computer": "UTICA",
+                     "SubjectUserName": "dschrute", "TargetUserName": "dschrute", "TargetServerName": "localhost"}])[0]
+    assert local.source_host == local.destination_host == "UTICA"  # a local run-as is not movement
+    assert not any(t.startswith("credential-switch:") for t in local.tags)
