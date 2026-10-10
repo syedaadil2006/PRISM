@@ -24,7 +24,7 @@ bundled data; limitations are stated where they exist.
 | Integrations | `backend/app/api/siem_routes.py`, `backend/app/services/syslog_receiver.py`, `backend/app/services/forwarder.py`, `scripts/siem_pull.py` | Splunk HEC endpoint, syslog receiver, alert forwarding (webhook, Splunk HEC, CEF), Splunk/Elastic pull connector |
 | API | `backend/app/api/` | FastAPI routers: core, agents, live feed, sign-in |
 | Frontend | `frontend/src/` | React + TypeScript dashboard (Simple and Analyst views, Cytoscape.js graph) |
-| Tests | `backend/tests/` | 180 automated tests (pytest) |
+| Tests | `backend/tests/` | 182 automated tests (pytest); 2 of them need a PostgreSQL test database |
 | Launcher | `Start PRISM.bat`, `scripts/start-prism.ps1` | System check, permission-based setup, start-up |
 | Live feeders | `scripts/live_replay.py`, `scripts/live_windows_collector.ps1` | Real-time data sources |
 
