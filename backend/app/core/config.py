@@ -233,6 +233,27 @@ class StorageSettings(BaseSettings):
     retention_days: int = 0
 
 
+class DetectionSettings(BaseSettings):
+    """Sigma rules, threat intelligence and behaviour baselines (see app/detection/)."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_DETECTION_", extra="ignore")
+
+    sigma_enabled: bool = True
+    #: Folders (or files) of Sigma rules. The bundled set comes first; add a
+    #: SigmaHQ checkout or your own folder here.
+    sigma_dirs: list[Path] = [BACKEND_ROOT / "detection" / "sigma"]
+    #: Folders of indicator files (STIX 2.1 JSON, CSV, or one indicator per line).
+    intel_dirs: list[Path] = [BACKEND_ROOT / "data" / "intel"]
+    baseline_enabled: bool = True
+    #: Events an account or computer needs before departures count as anomalies.
+    baseline_min_history: int = 20
+    #: How long an account or computer is watched before departures count.
+    baseline_learning_hours: float = 24.0
+    #: Low-risk patterns repeated on this many different days are routine
+    #: (kept as evidence, cannot start a chain). 0 switches this off.
+    baseline_routine_days: int = 3
+
+
 class BackupSettings(BaseSettings):
     """Automatic backups of PRISM's databases (see app/services/backup.py)."""
 
@@ -344,6 +365,7 @@ class Settings(BaseSettings):
     live: LiveSettings = Field(default_factory=LiveSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
+    detection: DetectionSettings = Field(default_factory=DetectionSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     syslog: SyslogSettings = Field(default_factory=SyslogSettings)
     forward: ForwardSettings = Field(default_factory=ForwardSettings)

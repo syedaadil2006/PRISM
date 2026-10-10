@@ -1,0 +1,25 @@
+title: Domain Trust and Domain Controller Discovery
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0007
+description: nltest or AdFind enumerating trusts and domain controllers is how intruders map an Active Directory forest.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  nltest:
+    CommandLine|contains:
+      - 'nltest /domain_trusts'
+      - 'nltest /dclist'
+      - 'nltest /all_trusts'
+  adfind:
+    - Image|endswith: '\adfind.exe'
+    - CommandLine|contains: 'trustdmp'
+  condition: 1 of them
+falsepositives:
+  - Domain administrators troubleshooting trusts
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1482

@@ -620,6 +620,62 @@ major SIEM vendors (`backend/app/ocsf.py`):
 
 ---
 
+## Detection: Sigma rules, threat intel, behaviour baselines, analyst feedback
+
+Everything below runs on this computer, while events are normalized, on top of PRISM's own rules.
+
+* **Sigma rules.** PRISM reads detection rules in the open [Sigma](https://sigmahq.io) format.
+  * It ships 16 rules of its own in `backend/detection/sigma`. They cover shadow-copy deletion, certutil/BITS
+    downloads, persistence through scheduled tasks and services, Defender being switched off, event logs
+    being cleared, comsvcs LSASS dumps, domain-trust discovery and Linux reverse shells.
+  * To use the community rules too, add a checkout of SigmaHQ (or your own folder) to
+    `PRISM_DETECTION_SIGMA_DIRS`.
+  * A match marks the event, adds the rule's ATT&CK techniques to the chain and names the rule in the
+    evidence.
+  * Rules PRISM cannot evaluate (aggregations, correlation rules, base64 modifiers) are skipped and listed
+    with the reason.
+  * **Tested with the full SigmaHQ rule set** (release r2026-07-01):
+    * 3,292 of 3,302 rules loaded (99.7%). The other 10 use `base64offset` or `fieldref` and are listed
+      as skipped.
+    * Checking all 19,672 BOTS events against every rule takes about 7 s; the bundled 16 take 0.2 s.
+    * Demo: SigmaHQ matched 7 of the 29 attack events and 0 of the 27 normal ones.
+    * BOTS: it added more of Cerber's steps to the main chain (25 to 30 events).
+    * To use it, download `sigma_all_rules.zip` from the SigmaHQ releases, unzip it, and add its folder to
+      `PRISM_DETECTION_SIGMA_DIRS`.
+  * On BOTS v1 the bundled rules find Cerber deleting shadow copies (`vssadmin delete shadows`,
+    `wmic shadowcopy delete`, `bcdedit ... recoveryenabled no`), which PRISM missed before. They add no
+    alerts on normal activity.
+* **Threat intelligence.** Put indicator files in `backend/data/intel/`:
+  * STIX 2.1 bundles, CSV (`type,value,description`), or one indicator per line.
+  * Domains (including sub-domains), IPs, file hashes and URLs are matched on every event.
+  * PRISM never downloads feeds itself.
+* **Behaviour baselines (UEBA).** PRISM learns, per account and computer, the usual computers, working hours
+  and programs. After 24 hours and 20 events of history, it notes departures as evidence, for example
+  "first sign-in by john.doe to FINANCE-PC" or "procdump.exe ran on FINANCE-PC for the first time".
+  * It also recognises routine work: the same low-risk sign-in or discovery command against the same
+    computer on 3 or more different days. Routine work no longer raises chains.
+  * Nothing a rule flagged is ever treated as routine.
+* **Analyst feedback.** On an attack chain, analysts can mark *True positive* or *False positive*.
+  * A false positive becomes suppressions: same action, same program or domain, same computer, same
+    account. Matching activity stays in the record but stops raising chains.
+  * Suppressions survive restarts, are listed on Admin > Detection, and can be removed there.
+* **More log sources** (recognised automatically):
+  * firewall and proxy logs in CEF (Palo Alto, Fortinet, Check Point and others);
+  * Linux auditd (commands and SSH sign-ins);
+  * AWS CloudTrail (console sign-ins; changes that weaken security, such as logging stopped, access keys
+    created, admin policies attached or buckets made public);
+  * Microsoft Entra ID / Microsoft 365 sign-ins, with Microsoft's risk rating.
+  * They map to ATT&CK, for example T1562.008, T1098.001/.003, T1078.004 and T1059.004, and export to OCSF as
+    Network Activity (4001) and API Activity (6003).
+* **Harder evaluation.** With 3 days of normal history added in front of the demo attack, including an IT
+  admin's daily remote-desktop sessions and discovery commands:
+  * Before Stage 3, that routine work produced 5 false attack chains: precision 66%, F1 0.80.
+  * With the routine baseline: 0 false chains and the whole attack still found (precision and recall 100%).
+  * The history is synthetic, built for this test, so read it as a check of the mechanism, not a
+    real-world rate.
+
+---
+
 ## Scale, monitoring and backups
 
 * **Ingestion is a queue; analysis runs in the background.**
@@ -671,6 +727,10 @@ major SIEM vendors (`backend/app/ocsf.py`):
 | `PRISM_AUTH_ACCESS_CODE_ENABLED` | `true` | `false` allows named accounts only |
 | `PRISM_AUTH_SESSION_HOURS` | `12` | Sessions end this long after sign-in |
 | `PRISM_AUTH_MAX_FAILED_LOGINS` / `_LOCKOUT_MINUTES` | `5` / `15` | Sign-in lockout |
+| `PRISM_DETECTION_SIGMA_DIRS` | `["backend/detection/sigma"]` | Folders of Sigma rules (JSON list) |
+| `PRISM_DETECTION_INTEL_DIRS` | `["backend/data/intel"]` | Folders of indicator files |
+| `PRISM_DETECTION_BASELINE_ENABLED` | `true` | Behaviour baselines and routine-work recognition |
+| `PRISM_DETECTION_BASELINE_ROUTINE_DAYS` | `3` | Days a pattern must recur to count as routine (0 = off) |
 | `PRISM_LIVE_MAX_PENDING` | `50000` | Events waiting for analysis before senders get HTTP 429 |
 | `PRISM_STORAGE_RETENTION_DAYS` | `0` | Delete stored events and investigations older than this (0 = keep) |
 | `PRISM_BACKUP_INTERVAL_HOURS` / `PRISM_BACKUP_KEEP` | `24` / `7` | Automatic backups and how many to keep |

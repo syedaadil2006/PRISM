@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 
 import { api, ApiError, type Account, type AuditCheck, type AuthStatus, type Role } from "../lib/api";
+import { DetectionAdmin } from "../components/DetectionAdmin";
 import { dateTime } from "../lib/format";
 import { useApi } from "../lib/useApi";
 
@@ -160,6 +161,8 @@ export function Admin({ auth }: { auth: AuthStatus }) {
           </table>
         </div>
       </section>
+
+      <DetectionAdmin />
 
       <section className="panel space-y-3 p-3">
         <div className="flex flex-wrap items-center gap-3">

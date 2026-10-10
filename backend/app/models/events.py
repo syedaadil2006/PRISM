@@ -19,6 +19,10 @@ class EventType(str, Enum):
     AUTHENTICATION = "authentication"
     DNS = "dns"
     ENDPOINT = "endpoint"
+    #: Firewall / proxy connections (CEF and similar).
+    NETWORK = "network"
+    #: Cloud control-plane activity (AWS CloudTrail API calls).
+    CLOUD = "cloud"
 
 
 class Severity(str, Enum):
@@ -75,6 +79,15 @@ class Action(str, Enum):
     SUSPICIOUS_EXECUTABLE = "SUSPICIOUS_EXECUTABLE"
     MALICIOUS_ATTACHMENT = "MALICIOUS_ATTACHMENT"
 
+    # --- network ---
+    NETWORK_CONNECTION = "NETWORK_CONNECTION"
+    CONNECTION_BLOCKED = "CONNECTION_BLOCKED"
+
+    # --- cloud ---
+    CLOUD_API_CALL = "CLOUD_API_CALL"
+    CLOUD_PRIVILEGE_CHANGE = "CLOUD_PRIVILEGE_CHANGE"
+    CLOUD_LOGGING_DISABLED = "CLOUD_LOGGING_DISABLED"
+
 
 #: Actions that move an identity from one host to another.
 MOVEMENT_ACTIONS: frozenset[Action] = frozenset(
@@ -102,6 +115,8 @@ NOTABLE_ACTIONS: frozenset[Action] = frozenset(
         Action.RDP_LOGIN,
         Action.PRIVILEGED_LOGIN,
         Action.REMOTE_SERVICE_EXEC,
+        Action.CLOUD_PRIVILEGE_CHANGE,
+        Action.CLOUD_LOGGING_DISABLED,
     }
 )
 
@@ -172,6 +187,11 @@ class NormalizedEvent(BaseModel):
             return f"{self.action.value} {self.user or '?'} -> {target}"
         if self.event_type is EventType.DNS:
             return f"{self.action.value} {self.domain or '?'} from {self.source_host or '?'}"
+        if self.event_type is EventType.NETWORK:
+            return (f"{self.action.value} {self.source_ip or self.source_host or '?'} -> "
+                    f"{self.destination_ip or self.destination_host or '?'}")
+        if self.event_type is EventType.CLOUD:
+            return f"{self.action.value} {self.process or '?'} by {self.user or '?'} in {self.destination_host or '?'}"
         return f"{self.action.value} {self.process or self.file_name or '?'} on {self.primary_host or '?'}"
 
 

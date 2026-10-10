@@ -6,6 +6,7 @@
 import { useState } from "react";
 
 import { AttackChainList } from "../components/AttackChainList";
+import { ChainFeedback, detectionFindings } from "../components/ChainFeedback";
 import { AssuranceBadge, SeverityBadge } from "../components/Badges";
 import { IntelPanel } from "../components/IntelPanel";
 import { RootCausePanel } from "../components/RootCausePanel";
@@ -34,6 +35,16 @@ export function AttackChains() {
 
       <div className="space-y-3">
         <RootCausePanel chain={chain} />
+        {chain && (
+          <ChainFeedback
+            chainId={chain.attack_chain_id}
+            onChanged={() => {
+              setSelectedId(null);
+              void chains.refresh();
+              void detail.refresh();
+            }}
+          />
+        )}
 
         <div className="panel">
           <div className="panel-header">
@@ -57,7 +68,22 @@ export function AttackChains() {
                     <td className="whitespace-nowrap px-3 py-1.5 font-mono text-slate-400">
                       {timeOnly(event.timestamp)}
                     </td>
-                    <td className="px-3 py-1.5 font-mono text-slate-200">{event.action}</td>
+                    <td className="px-3 py-1.5 font-mono text-slate-200">
+                      {event.action}
+                      {detectionFindings(event.tags).map((f) => (
+                        <span
+                          key={f.text}
+                          title={f.text}
+                          className={`ml-1.5 rounded px-1 py-0.5 font-sans text-[9px] ring-1 ${
+                            f.kind === "Baseline"
+                              ? "text-amber-300 ring-amber-500/30"
+                              : "text-fuchsia-300 ring-fuchsia-500/30"
+                          }`}
+                        >
+                          {f.kind}
+                        </span>
+                      ))}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-1.5 font-mono text-slate-400">
                       {event.source_host ?? "-"}
                       {event.destination_host && event.destination_host !== event.source_host

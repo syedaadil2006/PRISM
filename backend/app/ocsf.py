@@ -42,14 +42,17 @@ OCSF_VERSION = "1.3.0"
 SEVERITY_ID = {"info": 1, "low": 2, "medium": 3, "high": 4, "critical": 5}
 SEVERITY_NAME = {1: "Informational", 2: "Low", 3: "Medium", 4: "High", 5: "Critical"}
 CONFIDENCE_ID = {"low": 1, "medium": 2, "high": 3}
-CATEGORY = {1: "System Activity", 2: "Findings", 3: "Identity & Access Management", 4: "Network Activity"}
+CATEGORY = {1: "System Activity", 2: "Findings", 3: "Identity & Access Management", 4: "Network Activity",
+            6: "Application Activity"}
 CLASS_NAME = {
     1001: "File System Activity",
     1007: "Process Activity",
     2004: "Detection Finding",
     3002: "Authentication",
     3003: "Authorize Session",
+    4001: "Network Activity",
     4003: "DNS Activity",
+    6003: "API Activity",
 }
 LOGON_TYPE_ID = {
     "Interactive": 2, "Network": 3, "Batch": 4, "Service": 5, "Unlock": 7, "NetworkCleartext": 8,
@@ -150,6 +153,21 @@ def event_to_ocsf(event: NormalizedEvent, version: str = "") -> dict[str, Any]:
             share = raw.get("ShareName")
             if share and share != "-":
                 out["unmapped"]["share_name"] = share
+    elif event.event_type is EventType.NETWORK:
+        blocked = event.action is Action.CONNECTION_BLOCKED
+        out = _base(4001, 4, 5 if blocked else 1, "Refuse" if blocked else "Open", event.timestamp, severity, version,
+                    uid, src_endpoint=_endpoint(event.source_host, event.source_ip),
+                    dst_endpoint=_endpoint(event.destination_host, event.destination_ip),
+                    disposition="Blocked" if blocked else "Allowed", **common)
+        if raw.get("dpt"):
+            out["dst_endpoint"] = {**(out.get("dst_endpoint") or {}), "port": int(raw["dpt"]) if str(raw["dpt"]).isdigit() else raw["dpt"]}
+    elif event.event_type is EventType.CLOUD:
+        out = _base(6003, 6, 99, "Other", event.timestamp, severity, version, uid,
+                    api={"operation": event.process, "service": {"name": raw.get("eventSource")}},
+                    actor={"user": _user(event.user)},
+                    src_endpoint=_endpoint(None, event.source_ip),
+                    cloud={"provider": "AWS", "region": raw.get("awsRegion"), "account": {"uid": raw.get("recipientAccountId")}},
+                    **common)
     elif event.event_type is EventType.DNS:
         out = _base(4003, 4, 1, "Query", event.timestamp, severity, version, uid,
                     query={k: v for k, v in (("hostname", event.domain), ("type", raw.get("qtype_name"))) if v},

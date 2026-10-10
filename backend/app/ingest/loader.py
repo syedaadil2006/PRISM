@@ -290,8 +290,12 @@ def normalize_all(
     events: list[NormalizedEvent],
 ) -> list[NormalizedEvent]:
     """Apply cross-event enrichment and return events in chronological order."""
+    from app.detection.engine import current
+
     enrich_dns_volume(events)
     enrich_auth_failures(events)
     suppress_routine_privilege(events)
     events.sort(key=lambda e: (e.timestamp, e.event_id))
+    # Sigma rules, threat intel, analyst suppressions and behaviour baselines.
+    current().apply(events)
     return events

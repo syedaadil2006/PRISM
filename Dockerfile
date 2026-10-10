@@ -25,13 +25,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PRISM_AUTH_DB_URL=/data/security.db \
     PRISM_AUTH_TOKEN_FILE=/data/.prism_token \
     PRISM_BACKUP_DIR=/data/backups \
-    PRISM_LIVE_WATCH_DIR=/data/live
+    PRISM_LIVE_WATCH_DIR=/data/live \
+    PRISM_DETECTION_INTEL_DIRS='["/data/intel"]'
 
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements-postgres.txt backend/
 RUN pip install -r backend/requirements.txt
 
 COPY backend/app backend/app
+COPY backend/detection backend/detection
 COPY backend/data/demo backend/data/demo
 COPY backend/data/inventory backend/data/inventory
 COPY backend/data/botsv1/MANIFEST.json backend/data/botsv1/inventory.json backend/data/botsv1/
@@ -42,7 +44,7 @@ COPY docker/entrypoint.sh /usr/local/bin/prism-entrypoint
 # Runs as an unprivileged user that owns only /data.
 RUN chmod 0755 /usr/local/bin/prism-entrypoint \
     && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin prism \
-    && mkdir -p /data/live /data/backups /data/tls \
+    && mkdir -p /data/live /data/backups /data/tls /data/intel \
     && chown -R prism:prism /data
 USER prism
 VOLUME ["/data"]

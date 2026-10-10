@@ -404,6 +404,20 @@ the API answers `401` with `WWW-Authenticate: Bearer`.
 Roles: `viewer` may read; `analyst` may also use every other `POST`; `admin` may also use `/api/admin/*`,
 `POST /api/logs/reset` and `POST /api/live/start`. A role that is too low gets `403`.
 
+## Detection and analyst feedback
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/detection` | Sigma rules loaded and skipped (with reasons), threat-intel counts per file, baseline settings |
+| `POST` | `/api/admin/detection/reload` | Re-read rule and indicator folders and re-check every event (admin) |
+| `POST` | `/api/attacks/{chain_id}/feedback` | Body `{"verdict": "false_positive" or "true_positive", "note": "..."}`; a false positive creates suppressions (analyst) |
+| `GET` | `/api/feedback` | Suppressions and recent verdicts |
+| `DELETE` | `/api/feedback/suppressions/{id}` | Remove a suppression; matching events raise chains again (analyst) |
+
+Events carry what matched in their `tags`: `sigma:<rule id>`, `intel:<type>:<value>`, `anomaly:<kind>`, and
+`finding:Sigma: ...` / `finding:Threat intel: ...` / `finding:Baseline: ...` texts. Suppressed events say why in
+`suppressed` (`analyst: ...` or `routine: ...`).
+
 ## Operations
 
 | Method | Path | Purpose |

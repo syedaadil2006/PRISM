@@ -1,0 +1,29 @@
+title: Rundll32 Running Script Code or a DLL from a User Folder
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0008
+description: rundll32 executing javascript or a DLL from AppData, Temp or Public is a signed-binary proxy for malware.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  image:
+    - Image|endswith: '\rundll32.exe'
+    - CommandLine|contains: 'rundll32'
+  script:
+    CommandLine|contains:
+      - 'javascript:'
+      - 'mshtml,RunHTMLApplication'
+  user_folder:
+    CommandLine|contains:
+      - '\AppData\'
+      - '\Temp\'
+      - '\Users\Public\'
+  condition: image and (script or user_folder)
+falsepositives:
+  - Some per-user software installs
+level: high
+tags:
+  - attack.defense_evasion
+  - attack.t1218.011

@@ -1,0 +1,22 @@
+title: Local User Account Created with net user
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0005
+description: Attackers add accounts so they can come back even if the stolen password is changed.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains|all:
+      - 'net'
+      - 'user'
+      - '/add'
+  condition: selection
+falsepositives:
+  - Helpdesk creating accounts from the command line
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1136.001

@@ -1,0 +1,25 @@
+title: Windows Event Log Cleared
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0011
+description: wevtutil cl or Clear-EventLog erases the evidence of what happened on the computer.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  wevtutil:
+    CommandLine|contains|all:
+      - 'wevtutil'
+      - ' cl '
+  powershell:
+    CommandLine|contains:
+      - 'Clear-EventLog'
+      - 'Remove-EventLog'
+  condition: 1 of them
+falsepositives:
+  - Administrators resetting test machines
+level: high
+tags:
+  - attack.defense_evasion
+  - attack.t1070.001

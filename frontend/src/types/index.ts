@@ -7,7 +7,7 @@
 
 export type Assurance = "observed" | "correlated" | "inferred" | "predicted";
 export type Confidence = "low" | "medium" | "high";
-export type EventTypeName = "authentication" | "dns" | "endpoint";
+export type EventTypeName = "authentication" | "dns" | "endpoint" | "network" | "cloud";
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface NormalizedEvent {

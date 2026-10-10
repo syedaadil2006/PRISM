@@ -30,6 +30,8 @@ from app.api.siem_routes import router as siem_router
 from app.api.ocsf_routes import router as ocsf_router
 from app.api.admin_routes import router as admin_router
 from app.api.ops_routes import router as ops_router
+from app.api.detection_routes import router as detection_router
+from app.detection.engine import build as build_detections, install as install_detections
 from app.core.metrics import MetricsMiddleware, RequestMetrics
 from app.services.backup import create_backup
 from app.core.auth import AuthMiddleware, SecurityHeadersMiddleware, resolve_token
@@ -147,6 +149,7 @@ def _check_database_locations(settings) -> None:  # noqa: ANN001
 def create_app() -> FastAPI:
     settings = get_settings()
     _check_database_locations(settings)
+    install_detections(build_detections(settings.detection))
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
@@ -188,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(ops_router)
+    app.include_router(detection_router)
     app.include_router(siem_router)
     app.include_router(ocsf_router)
 

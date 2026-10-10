@@ -1,0 +1,36 @@
+title: Volume Shadow Copies Deleted
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0002
+description: Deleting shadow copies removes recovery points; ransomware does this right before encrypting.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  vssadmin:
+    CommandLine|contains|all:
+      - 'vssadmin'
+      - 'delete'
+      - 'shadows'
+  wmic:
+    CommandLine|contains|all:
+      - 'shadowcopy'
+      - 'delete'
+  wbadmin:
+    CommandLine|contains|all:
+      - 'wbadmin'
+      - 'delete'
+      - 'catalog'
+  bcdedit:
+    CommandLine|contains|all:
+      - 'bcdedit'
+      - 'recoveryenabled'
+      - 'no'
+  condition: 1 of them
+falsepositives:
+  - Rare backup maintenance by administrators
+level: critical
+tags:
+  - attack.impact
+  - attack.t1490

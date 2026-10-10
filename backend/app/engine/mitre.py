@@ -180,7 +180,7 @@ RULES: list[MitreRule] = [
         tactic_id="TA0002",
         confidence=Confidence.MEDIUM,
         explanation="A command shell ran a child command, usually as part of hands-on-keyboard activity.",
-        matches=lambda e: e.action is Action.COMMAND_EXEC,
+        matches=lambda e: e.action is Action.COMMAND_EXEC and "linux" not in e.tags,
         evidence=lambda e: "{} on {}: {}".format(
             e.process or "cmd.exe", e.primary_host, (e.command_line or "")[:160]
         ),
@@ -372,6 +372,102 @@ RULES += [
 ]
 
 
+#: ATT&CK tactic names used in Sigma tags -> tactic ids.
+SIGMA_TACTICS: dict[str, str] = {
+    name.lower().replace(" ", "_"): tid for tid, name in TACTIC_NAMES.items()
+}
+
+
+def _sigma_mappings(event: NormalizedEvent, seen: set[str]) -> list[MitreMapping]:
+    """Techniques named by the Sigma rules that matched this event."""
+    from app.detection.engine import SIGMA_TAG, current
+
+    detections = current()
+    mappings: list[MitreMapping] = []
+    for tag in event.tags:
+        if not tag.startswith(SIGMA_TAG):
+            continue
+        rule = detections.rule(tag[len(SIGMA_TAG):])
+        if rule is None or rule.level in {"informational", "low"}:
+            continue
+        tactic_id = next((SIGMA_TACTICS[t] for t in rule.tactics if t in SIGMA_TACTICS), "TA0002")
+        for technique in rule.techniques:
+            if technique in seen:
+                continue
+            seen.add(technique)
+            mappings.append(MitreMapping(
+                technique_id=technique,
+                technique_name=f"{technique} (Sigma: {rule.title})",
+                tactic_id=tactic_id,
+                tactic=TACTIC_NAMES.get(tactic_id, tactic_id),
+                event_id=event.event_id,
+                evidence=f"Sigma rule \"{rule.title}\" matched on {event.primary_host}: "
+                         + (event.command_line or event.domain or event.process or event.summary()),
+                explanation=rule.description or "Matched a Sigma detection rule.",
+                confidence=Confidence.HIGH if rule.level in {"high", "critical"} else Confidence.MEDIUM,
+                assurance=Assurance.OBSERVED,
+                reference=ATTACK_BASE_URL + technique.replace(".", "/") + "/",
+            ))
+    return mappings
+
+
+def _cloud_call(event: NormalizedEvent) -> str:
+    return event.process or ""
+
+
+RULES += [
+    MitreRule(
+        technique_id="T1562.008",
+        technique_name="Impair Defenses: Disable or Modify Cloud Logs",
+        tactic_id="TA0005",
+        confidence=Confidence.HIGH,
+        explanation="Cloud audit logging or threat detection was switched off, which blinds the defenders.",
+        matches=lambda e: e.action is Action.CLOUD_LOGGING_DISABLED,
+        evidence=lambda e: "{} called {} in {}".format(e.user or "unknown identity", _cloud_call(e), e.destination_host),
+    ),
+    MitreRule(
+        technique_id="T1098.001",
+        technique_name="Account Manipulation: Additional Cloud Credentials",
+        tactic_id="TA0003",
+        confidence=Confidence.MEDIUM,
+        explanation="New access keys or console passwords let an intruder keep access to the cloud account.",
+        matches=lambda e: e.action is Action.CLOUD_PRIVILEGE_CHANGE
+        and _cloud_call(e) in {"CreateAccessKey", "CreateLoginProfile", "UpdateLoginProfile"},
+        evidence=lambda e: "{} called {} in {}".format(e.user or "unknown identity", _cloud_call(e), e.destination_host),
+    ),
+    MitreRule(
+        technique_id="T1098.003",
+        technique_name="Account Manipulation: Additional Cloud Roles",
+        tactic_id="TA0004",
+        confidence=Confidence.MEDIUM,
+        explanation="A policy or group membership granting more permissions was added to a cloud identity.",
+        matches=lambda e: e.action is Action.CLOUD_PRIVILEGE_CHANGE
+        and _cloud_call(e) in {"AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy", "PutUserPolicy", "AddUserToGroup"},
+        evidence=lambda e: "; ".join(_findings(e)) or "{} called {}".format(e.user, _cloud_call(e)),
+    ),
+    MitreRule(
+        technique_id="T1078.004",
+        technique_name="Valid Accounts: Cloud Accounts",
+        tactic_id="TA0001",
+        confidence=Confidence.MEDIUM,
+        explanation="A cloud sign-in the provider rated risky, or a sign-in as the AWS root user.",
+        matches=lambda e: e.action is Action.LOGIN_SUCCESS and e.suspicious
+        and any(t in e.tags for t in ("entra", "cloudtrail")),
+        evidence=lambda e: "{} signed in to {} from {}: {}".format(
+            e.user or "?", e.destination_host, e.source_ip or "?", "; ".join(_findings(e))),
+    ),
+    MitreRule(
+        technique_id="T1059.004",
+        technique_name="Command and Scripting Interpreter: Unix Shell",
+        tactic_id="TA0002",
+        confidence=Confidence.HIGH,
+        explanation="A shell was started with its input and output connected to a network socket (a reverse shell).",
+        matches=lambda e: "auditd" in e.tags and any("reverse shell" in f for f in _findings(e)),
+        evidence=lambda e: "{} on {}: {}".format(e.process or "shell", e.primary_host, (e.command_line or "")[:160]),
+    ),
+]
+
+
 def map_event(event: NormalizedEvent) -> list[MitreMapping]:
     """Return every technique that legitimately applies to one event."""
     mappings: list[MitreMapping] = []
@@ -382,6 +478,7 @@ def map_event(event: NormalizedEvent) -> list[MitreMapping]:
             continue
         seen.add(mapping.technique_id)
         mappings.append(mapping)
+    mappings.extend(_sigma_mappings(event, seen))
     return mappings
 
 

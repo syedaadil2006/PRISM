@@ -24,7 +24,7 @@ bundled data; limitations are stated where they exist.
 | Integrations | `backend/app/api/siem_routes.py`, `backend/app/services/syslog_receiver.py`, `backend/app/services/forwarder.py`, `scripts/siem_pull.py` | Splunk HEC endpoint, syslog receiver, alert forwarding (webhook, Splunk HEC, CEF), Splunk/Elastic pull connector |
 | API | `backend/app/api/` | FastAPI routers: core, agents, live feed, sign-in |
 | Frontend | `frontend/src/` | React + TypeScript dashboard (Simple and Analyst views, Cytoscape.js graph) |
-| Tests | `backend/tests/` | 182 automated tests (pytest); 2 of them need a PostgreSQL test database |
+| Tests | `backend/tests/` | 207 automated tests (pytest); 2 of them need a PostgreSQL test database |
 | Launcher | `Start PRISM.bat`, `scripts/start-prism.ps1` | System check, permission-based setup, start-up |
 | Live feeders | `scripts/live_replay.py`, `scripts/live_windows_collector.ps1` | Real-time data sources |
 
@@ -138,6 +138,7 @@ sign-in needs the access code (section 9). Main groups:
 | Simulation | `GET /api/simulation`, `POST /api/simulation/start · pause · resume · step · reset` |
 | OCSF | `GET /api/ocsf/events` (`?chain_id=`, `?format=ndjson`), `GET /api/ocsf/findings`, `GET /api/ocsf/info` |
 | Sign-in | `GET /api/auth/status`, `POST /api/auth/login`, `POST /api/auth/logout`, `POST /api/auth/password` |
+| Detection | `GET /api/detection`, `POST /api/admin/detection/reload`, `POST /api/attacks/{id}/feedback`, `GET /api/feedback`, `DELETE /api/feedback/suppressions/{id}` |
 | Operations | `GET /api/metrics` (Prometheus), `GET/POST /api/admin/backups` |
 | Admin | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/{name}`, `GET /api/admin/audit`, `GET /api/admin/audit/verify` |
 | Agents | `GET /api/agents/roster`, `/api/agents/tools`; `POST/GET /api/agents/investigations`; `…/{id}`, `…/timeline`, `…/evidence`, `…/report?format=html\|md`; `POST …/findings/{finding_id}/decision`, `POST …/cancel` |

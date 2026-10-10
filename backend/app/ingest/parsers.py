@@ -473,6 +473,18 @@ def _parse_ocsf(record: LogRecord, ctx: ParseContext) -> NormalizedEvent:
 
 PARSERS["ocsf"] = _parse_ocsf
 
+#: More sources (app/ingest/sources.py): (format name, record test) pairs.
+EXTRA_DETECTORS: list = []
+
+
+def _register_sources() -> None:
+    from app.ingest.sources import register
+
+    register(PARSERS, EXTRA_DETECTORS)
+
+
+_register_sources()
+
 
 def detect_format(record: LogRecord) -> str:
     """Best-effort format sniffing so ingestion works without a format hint."""
@@ -488,6 +500,9 @@ def detect_format(record: LogRecord) -> str:
 
     if is_ocsf(record):
         return "ocsf"
+    for name, test in EXTRA_DETECTORS:  # CloudTrail, Entra ID sign-ins, CEF, auditd
+        if test(record):
+            return name
     # Elastic Common Schema (Winlogbeat, Filebeat, Elastic Agent): nested
     # objects such as "winlog" or "event" would otherwise confuse the checks below.
     from app.ingest.ecs import is_ecs

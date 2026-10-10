@@ -121,6 +121,28 @@ export interface AuditEntry {
   detail: Record<string, unknown>;
 }
 
+export interface SuppressionEntry {
+  id: string;
+  action: string;
+  indicator: string;
+  host: string;
+  user: string;
+  chain_id: string;
+  analyst: string;
+  note: string;
+  created_at: string;
+}
+
+export interface DetectionInfo {
+  version: string;
+  sigma: { loaded: number; skipped: number };
+  intel: { indicators: number; domains: number; ips: number; hashes: number; urls: number; files: { file: string; indicators: number; error?: string }[] };
+  baseline: { enabled: boolean; min_history: number; learning_hours: number };
+  suppressions: number;
+  rules: { id: string; title: string; level: string; techniques: string[]; logsource: string; source: string }[];
+  skipped_rules: { file: string; reason: string }[];
+}
+
 export interface AuditCheck {
   ok: boolean;
   entries: number;
@@ -155,6 +177,17 @@ export const api = {
       throw new ApiError(body.detail ?? `${response.status} ${response.statusText}`, response.status);
     }
   },
+  chainFeedback: (chainId: string, verdict: "true_positive" | "false_positive", note: string) =>
+    request<{ verdict: string; suppressions_created: SuppressionEntry[]; chains_now: number }>(
+      `/attacks/${encodeURIComponent(chainId)}/feedback`,
+      json({ verdict, note }),
+    ),
+  detection: () => request<DetectionInfo>("/detection"),
+  reloadDetection: () => request<DetectionInfo>("/admin/detection/reload", { method: "POST" }),
+  feedback: () =>
+    request<{ suppressions: SuppressionEntry[]; verdicts: Record<string, string>[] }>("/feedback"),
+  deleteSuppression: (id: string) =>
+    request<{ removed: string }>(`/feedback/suppressions/${encodeURIComponent(id)}`, { method: "DELETE" }),
   audit: (limit = 200) => request<AuditEntry[]>(`/admin/audit${query({ limit })}`),
   verifyAudit: () => request<AuditCheck>("/admin/audit/verify"),
 

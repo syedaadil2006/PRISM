@@ -1,0 +1,24 @@
+title: DNS Lookup of a Tunnelling or Paste Service
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0016
+description: Lookups of tunnelling or anonymous paste services are often used for command and control or data theft.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  category: dns_query
+detection:
+  selection:
+    QueryName|endswith:
+      - '.ngrok.io'
+      - '.ngrok-free.app'
+      - '.trycloudflare.com'
+      - 'pastebin.com'
+      - '.serveo.net'
+      - 'transfer.sh'
+  condition: selection
+falsepositives:
+  - Developers using tunnelling services for testing
+level: medium
+tags:
+  - attack.command_and_control
+  - attack.t1572

@@ -52,6 +52,9 @@ from app.services.storage import Store
 logger = get_logger(__name__)
 
 
+FEEDBACK_META = "detection_feedback"
+
+
 class IngestBusy(Exception):
     """Too many events are waiting for analysis; the sender should retry later."""
 
@@ -133,6 +136,12 @@ class SocState:
 
     def bootstrap(self) -> None:
         """Load inventory, the demo dataset if enabled, and connect Neo4j."""
+        from app.detection.engine import current
+
+        try:  # analyst feedback (false-positive suppressions) survives restarts
+            current().import_feedback(self.store.get_meta(FEEDBACK_META))
+        except ValueError as exc:
+            logger.warning("stored analyst feedback unreadable", extra={"error": str(exc)})
         self.inventory = (
             load_inventory(Path(self.settings.inventory_file))
             if self.settings.inventory_file is not None
@@ -267,6 +276,36 @@ class SocState:
         async with self._lock:
             self._adopt(merged, trimmed)
             return self._apply(analysis, ms)
+
+    async def reanalyse(self) -> Analysis:
+        """Re-run detection over every event (rules, intel or feedback changed), then analyse."""
+        async with self._analysis_lock:
+            async with self._lock:
+                self._dirty = False
+                pending, self._pending = self._pending, []
+                base, gating, revealed = list(self._all_events), self._gating, self._revealed
+
+            def work() -> tuple[list[NormalizedEvent], Analysis, float]:
+                merged = normalize_all(base + pending)
+                visible = merged[:revealed] if gating else merged
+                return (merged, *self._compute(visible))
+
+            self._analysing = True
+            try:
+                merged, analysis, ms = await asyncio.to_thread(work)
+            finally:
+                self._analysing = False
+            async with self._lock:
+                self._all_events = merged
+                if not gating:
+                    self._revealed = len(merged)
+                self.sources = sorted({e.source_log for e in merged})
+                return self._apply(analysis, ms)
+
+    def save_feedback(self) -> None:
+        from app.detection.engine import current
+
+        self.store.set_meta(FEEDBACK_META, current().export_feedback())
 
     def _apply(self, analysis: Analysis, ms: float) -> Analysis:
         self.analysis = analysis

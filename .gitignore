@@ -40,3 +40,6 @@ backend/data/.prism_token
 backend/data/security.db*
 backend/data/tls/
 backend/data/backups/
+# Threat-intel files are your own data; only the README is kept
+backend/data/intel/*
+!backend/data/intel/README.md

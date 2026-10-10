@@ -5,6 +5,7 @@ pydantic==2.12.5
 pydantic-settings==2.11.0
 python-dateutil==2.9.0.post0
 networkx==3.4.2
+pyyaml==6.0.3
 python-multipart==0.0.32
 # Only needed by the optional LLM narrator; the agents run without it.
 httpx==0.28.1

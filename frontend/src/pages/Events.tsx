@@ -18,6 +18,8 @@ const TYPES = [
   { value: "authentication", label: "Authentication" },
   { value: "dns", label: "DNS" },
   { value: "endpoint", label: "Endpoint" },
+  { value: "network", label: "Network (firewall)" },
+  { value: "cloud", label: "Cloud" },
 ];
 
 export function Events() {

@@ -1,0 +1,30 @@
+title: Service Created Pointing to a Script or Temporary Folder
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0004
+description: sc.exe create with a binary path in a temporary or user folder, or a command interpreter, installs a malicious service.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains|all:
+      - 'sc'
+      - 'create'
+      - 'binpath'
+  suspicious_path:
+    CommandLine|contains:
+      - '\Temp\'
+      - '\AppData\'
+      - '\Users\Public\'
+      - 'cmd.exe /c'
+      - 'powershell'
+  condition: selection and suspicious_path
+falsepositives:
+  - Unusual but legitimate software deployment
+level: high
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1543.003

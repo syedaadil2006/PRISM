@@ -1,0 +1,29 @@
+title: Data Archived with a Password Before Leaving
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0014
+description: 7-Zip or WinRAR creating a password-protected archive is a usual step before data is stolen.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  tool:
+    CommandLine|contains:
+      - '7z'
+      - 'rar.exe'
+      - 'winrar'
+  archive:
+    CommandLine|contains:
+      - ' a '
+  password:
+    CommandLine|contains:
+      - ' -p'
+      - ' -hp'
+  condition: tool and archive and password
+falsepositives:
+  - Users protecting files they send by mail
+level: medium
+tags:
+  - attack.collection
+  - attack.t1560.001

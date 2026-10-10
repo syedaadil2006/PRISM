@@ -1,0 +1,21 @@
+title: Linux Reverse Shell Command
+id: 5d1f8f3e-6b7a-4c1e-9b0a-1a2b3c4d0015
+description: bash -i redirected to /dev/tcp, or nc -e, opens an interactive shell back to the attacker.
+author: PRISM
+date: 2026-10-10
+status: stable
+logsource:
+  product: linux
+detection:
+  keywords:
+    - '/dev/tcp/'
+    - 'nc -e /bin/sh'
+    - 'nc -e /bin/bash'
+    - 'bash -i >&'
+  condition: keywords
+falsepositives:
+  - Unknown
+level: critical
+tags:
+  - attack.execution
+  - attack.t1059.004
