@@ -165,3 +165,14 @@ def test_host_state_matches_the_graph(client):
     }
     for name, state in graph_states.items():
         assert hosts[name]["state"] == state, name
+
+
+def test_dashboard_shell_is_never_cached_and_reports_its_build(client):
+    from app.core.config import PROJECT_ROOT
+
+    if not (PROJECT_ROOT / "frontend" / "dist" / "index.html").exists():
+        return  # dashboard not built in this checkout
+    page = client.get("/")
+    assert page.headers["cache-control"] == "no-cache"
+    build = client.get("/api/health").json()["ui_build"]
+    assert build and build.startswith("index-") and build in page.text

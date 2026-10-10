@@ -19,6 +19,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -83,10 +84,40 @@ def retime(record: dict, when: datetime, run_id: str) -> dict:
     return out
 
 
+def access_code() -> str:
+    """PRISM's API access code: PRISM_AUTH_TOKEN, else the code PRISM saved locally."""
+    import os
+
+    code = os.environ.get("PRISM_AUTH_TOKEN", "").strip()
+    if not code:
+        try:
+            code = (ROOT / "backend" / "data" / ".prism_token").read_text(encoding="utf-8").strip()
+        except OSError:
+            code = ""
+    return code
+
+
 def post(url: str, body: bytes, content_type: str = "application/x-ndjson") -> dict:
-    request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": content_type})
+    headers = {"Content-Type": content_type}
+    code = access_code()
+    if code:
+        headers["X-PRISM-Token"] = code
+    request = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def is_local(url: str) -> bool:
+    """True when the PRISM address is this computer (local-only mode)."""
+    import ipaddress
+
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def main() -> int:
@@ -95,7 +126,11 @@ def main() -> int:
     parser.add_argument("--dir", type=Path, default=DEFAULT_DIR, help="folder of .csv / .jsonl logs")
     parser.add_argument("--speed", type=float, default=30.0, help="how much faster than real time (default 30)")
     parser.add_argument("--keep-dataset", action="store_true", help="do not clear the current data first")
+    parser.add_argument("--allow-remote", action="store_true", help="allow a PRISM on another machine (off: local-only)")
     args = parser.parse_args()
+    if not args.allow_remote and not is_local(args.server):
+        print("Refusing to send events to {}: local-only mode keeps data on this computer. Use --allow-remote if intended.".format(args.server))
+        return 1
 
     rows = load(args.dir)
     if not rows:

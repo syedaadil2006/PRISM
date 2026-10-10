@@ -2,6 +2,7 @@
 
 import { NavLink } from "react-router-dom";
 
+import { api, type AuthStatus } from "../lib/api";
 import type { Health, LiveStatus, SimulationStatus } from "../types";
 
 const LINKS = [
@@ -18,11 +19,25 @@ export function TopNav({
   health,
   simulation,
   live: feed,
+  auth,
+  onSignedOut,
 }: {
   health: Health | null;
   simulation: SimulationStatus | null;
   live: LiveStatus | null;
+  auth: AuthStatus;
+  onSignedOut: () => void;
 }) {
+  const links = auth.role === "admin" ? [...LINKS, { to: "/admin", label: "Admin" }] : LINKS;
+
+  async function signOut() {
+    try {
+      await api.logout();
+    } finally {
+      onSignedOut();
+    }
+  }
+
   const live = simulation?.state === "running";
   const streaming = Boolean(feed?.receiving);
 
@@ -44,7 +59,7 @@ export function TopNav({
         </div>
 
         <nav className="flex flex-wrap items-center gap-1">
-          {LINKS.map((link) => (
+          {links.map((link) => (
             <NavLink
               key={link.to}
               to={link.to}
@@ -95,6 +110,23 @@ export function TopNav({
               <span>{health.chains} chains</span>
               <span className="hidden sm:inline">v{health.version}</span>
             </>
+          )}
+          {auth.enabled && auth.user && (
+            <span className="flex items-center gap-2 border-l border-ink-700 pl-3">
+              <span className="text-slate-300" title={`Signed in as ${auth.user} (${auth.role})`}>
+                {auth.kind === "access-code" ? "access code" : auth.user}
+                <span className="ml-1 rounded bg-ink-800 px-1 py-0.5 uppercase text-slate-400 ring-1 ring-ink-600">
+                  {auth.role}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => void signOut()}
+                className="rounded px-1.5 py-0.5 text-slate-400 ring-1 ring-ink-600 transition hover:text-slate-100"
+              >
+                Sign out
+              </button>
+            </span>
           )}
         </div>
       </div>

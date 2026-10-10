@@ -9,11 +9,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
+from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
 from app.core.logging_config import get_logger
+from app.ingest.indicators import is_internal_domain
 from app.ingest.parsers import LogRecord, ParseContext, parse_records
 from app.models.events import Action, NormalizedEvent, Severity
 from app.models.inventory import Inventory
@@ -153,7 +156,8 @@ def enrich_dns_volume(events: list[NormalizedEvent]) -> list[NormalizedEvent]:
     """
     buckets: dict[tuple[str, str], list[NormalizedEvent]] = defaultdict(list)
     for event in events:
-        if event.domain and event.source_host:
+        # Reverse lookups and local names repeat by design; they are not beaconing.
+        if event.domain and event.source_host and not is_internal_domain(event.domain):
             buckets[(event.source_host, event.domain)].append(event)
 
     for (host, domain), group in buckets.items():
@@ -209,11 +213,85 @@ def enrich_auth_failures(events: list[NormalizedEvent]) -> list[NormalizedEvent]
     return events
 
 
+#: Accounts Windows itself runs as. Their privileged logons are routine.
+SERVICE_ACCOUNT_RE = re.compile(
+    r"^(system|local service|network service|anonymous logon|dwm-\d+|umfd-\d+|.*\$)$", re.IGNORECASE
+)
+#: Logon types of someone at the computer itself: sign-in, unlock, cached sign-in.
+CONSOLE_LOGON_TYPES = frozenset({"Interactive", "Unlock", "CachedInteractive", "2", "7", "11"})
+#: A privileged logon this close to the same user's console sign-in on the same
+#: computer is that user's own session (sign-in, or approving a UAC prompt).
+CONSOLE_WINDOW_SECONDS = 12 * 3600
+#: Repeated privileged logons for one account on one host within this window
+#: count once: Windows writes one for every administrator session.
+PRIVILEGED_REPEAT_WINDOW_SECONDS = 600
+
+
+def suppress_routine_privilege(events: list[NormalizedEvent]) -> list[NormalizedEvent]:
+    """Keep routine privileged logons out of attack chains.
+
+    Windows records a privileged logon (4672) for every administrator session
+    and for its own service accounts, so on a real network they vastly
+    outnumber everything else. They stay in the event list, marked
+    ``suppressed`` with the reason, but only the first of a burst for a real
+    account can start or extend a chain.
+    """
+    # Who signs in at each computer's own console (sign-in, unlock, cached
+    # sign-in) from the computer itself. Windows also writes a privileged logon
+    # every time that user approves an administrator (UAC) prompt.
+    console: dict[tuple[str, str], list[datetime]] = defaultdict(list)
+    for event in events:
+        if (
+            event.action is Action.LOGIN_SUCCESS
+            and event.user
+            and event.destination_host
+            and (event.logon_type or "") in CONSOLE_LOGON_TYPES
+            and (event.source_ip in (None, "127.0.0.1", "::1"))
+            and event.source_host in (None, event.destination_host)
+        ):
+            console[(event.user.lower(), event.destination_host.upper())].append(event.timestamp)
+
+    groups: dict[tuple[str, str], list[NormalizedEvent]] = defaultdict(list)
+    for event in events:
+        if event.action is not Action.PRIVILEGED_LOGIN:
+            continue
+        event.suppressed = None  # recomputed from scratch on every pass
+        if event.user and SERVICE_ACCOUNT_RE.match(event.user):
+            event.suppressed = "routine: privileged logon by a Windows service account"
+            continue
+        if not event.user:
+            # Computer accounts (HOST$) are dropped by the parsers, so an
+            # unattributed privileged logon is the machine logging on to itself.
+            event.suppressed = "routine: privileged logon with no named account (computer or system account)"
+            continue
+        signed_in = console.get((event.user.lower(), (event.primary_host or "").upper()), [])
+        if any(abs((event.timestamp - t).total_seconds()) <= CONSOLE_WINDOW_SECONDS for t in signed_in):
+            event.suppressed = (
+                "routine: privileged logon by this computer's own console user "
+                "(local sign-in, unlock or administrator approval)"
+            )
+            continue
+        groups[(event.user or "?", event.primary_host or "?")].append(event)
+
+    for group in groups.values():
+        group.sort(key=lambda e: (e.timestamp, e.event_id))
+        kept = group[0]
+        for event in group[1:]:
+            if (event.timestamp - kept.timestamp).total_seconds() <= PRIVILEGED_REPEAT_WINDOW_SECONDS:
+                event.suppressed = "repeat of {} (same account and host within {} minutes)".format(
+                    kept.event_id, PRIVILEGED_REPEAT_WINDOW_SECONDS // 60
+                )
+            else:
+                kept = event
+    return events
+
+
 def normalize_all(
     events: list[NormalizedEvent],
 ) -> list[NormalizedEvent]:
     """Apply cross-event enrichment and return events in chronological order."""
     enrich_dns_volume(events)
     enrich_auth_failures(events)
+    suppress_routine_privilege(events)
     events.sort(key=lambda e: (e.timestamp, e.event_id))
     return events

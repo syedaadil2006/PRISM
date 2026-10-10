@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 # The existing suite asserts the specifics of the synthetic HR-PC -> FINANCE-PC
 # scenario, so it pins that dataset. This must happen before any settings are
 # loaded. The BOTSv1 tests (test_botsv1.py) build their own settings.
 os.environ.setdefault("PRISM_DATASET", "synthetic")
+# Tests run in memory; the storage tests point at their own temporary file.
+os.environ.setdefault("PRISM_STORAGE_ENABLED", "false")
+# The API access code is switched off for the suite; test_auth.py turns it on.
+os.environ.setdefault("PRISM_AUTH_ENABLED", "false")
+# Tests that turn it on must never touch the real accounts database.
+os.environ.setdefault("PRISM_AUTH_DB_URL", os.path.join(tempfile.mkdtemp(prefix="prism-tests-"), "security.db"))
 
 from datetime import datetime, timedelta, timezone
 

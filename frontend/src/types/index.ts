@@ -328,6 +328,7 @@ export interface Health {
   sources: string[];
   ingest_errors: string[];
   computed_at: string | null;
+  ui_build?: string | null;
 }
 
 export interface IngestSummary {

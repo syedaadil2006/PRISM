@@ -57,6 +57,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Non-JSON error body; the status line is all we have.
     }
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      // Signed out or the session expired: let the app show the sign-in screen.
+      window.dispatchEvent(new Event("prism:unauthorized"));
+    }
     throw new ApiError(detail, response.status);
   }
   return (await response.json()) as T;
@@ -82,7 +86,75 @@ export interface EventFilters {
   limit?: number;
 }
 
+export type Role = "viewer" | "analyst" | "admin";
+
+export interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+  user?: string | null;
+  role?: Role | null;
+  /** "user" (named account) or "access-code". */
+  kind?: string | null;
+  accounts?: boolean;
+  access_code?: boolean;
+}
+
+export interface Account {
+  username: string;
+  role: Role;
+  disabled: boolean;
+  created_at: string;
+  last_login: string | null;
+}
+
+export interface AuditEntry {
+  seq: number;
+  ts: string;
+  actor: string;
+  action: string;
+  target: string;
+  outcome: string;
+  address: string;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditCheck {
+  ok: boolean;
+  entries: number;
+  first_broken: number | null;
+  reason: string | null;
+}
+
+const json = (body: unknown, method = "POST"): RequestInit => ({
+  method,
+  headers: { Accept: "application/json", "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
 export const api = {
+  authStatus: () => request<AuthStatus>("/auth/status"),
+  login: (token: string) => request<AuthStatus>("/auth/login", json({ token })),
+  loginUser: (username: string, password: string) =>
+    request<AuthStatus>("/auth/login", json({ username, password })),
+  logout: () => request<AuthStatus>("/auth/logout", { method: "POST" }),
+  changePassword: (current_password: string, new_password: string) =>
+    request<AuthStatus>("/auth/password", json({ current_password, new_password })),
+
+  accounts: () => request<Account[]>("/admin/users"),
+  createAccount: (username: string, password: string, role: Role) =>
+    request<Account>("/admin/users", json({ username, password, role })),
+  updateAccount: (username: string, change: { role?: Role; disabled?: boolean; password?: string }) =>
+    request<Account>(`/admin/users/${encodeURIComponent(username)}`, json(change, "PATCH")),
+  deleteAccount: async (username: string) => {
+    const response = await fetch(`${BASE}/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { detail?: string };
+      throw new ApiError(body.detail ?? `${response.status} ${response.statusText}`, response.status);
+    }
+  },
+  audit: (limit = 200) => request<AuditEntry[]>(`/admin/audit${query({ limit })}`),
+  verifyAudit: () => request<AuditCheck>("/admin/audit/verify"),
+
   health: () => request<Health>("/health"),
   config: () => request<EngineConfig>("/config"),
   stats: () => request<DashboardStats>("/stats"),

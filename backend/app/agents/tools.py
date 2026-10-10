@@ -151,6 +151,7 @@ def _filter_events(
     until = args.get("until")
     window_seconds = args.get("window_seconds")
     around = args.get("around_event_id")
+    wanted = {str(i) for i in args.get("event_ids") or []} or None
 
     start: datetime | None = None
     end: datetime | None = None
@@ -166,6 +167,8 @@ def _filter_events(
 
     selected: list[NormalizedEvent] = []
     for event in ctx.events:
+        if wanted is not None and event.event_id not in wanted:
+            continue
         if event_type is not None and event.event_type is not event_type:
             continue
         if host and host not in {h.upper() for h in event.hosts()}:
@@ -187,7 +190,7 @@ def _filter_events(
         selected.append(event)
 
     selected.sort(key=lambda e: e.timestamp)
-    limit = int(args.get("limit", 50))
+    limit = int(args.get("limit", len(wanted) if wanted else 50))
     return selected[:limit]
 
 
@@ -226,7 +229,8 @@ _SEARCH_PARAMS: dict[str, Any] = {
     "window_seconds": {"type": "number", "description": "Half-width of that window"},
     "since": {"type": "string", "description": "ISO-8601 lower bound"},
     "until": {"type": "string", "description": "ISO-8601 upper bound"},
-    "limit": {"type": "integer", "description": "Maximum rows (default 50)"},
+    "event_ids": {"type": "array", "items": {"type": "string"}, "description": "Fetch exactly these events"},
+    "limit": {"type": "integer", "description": "Maximum rows (default 50, or all requested event_ids)"},
 }
 
 

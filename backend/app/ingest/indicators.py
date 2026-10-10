@@ -121,7 +121,11 @@ _DGA_RE = re.compile(r"^[a-z0-9]{12,}$")
 
 
 def is_internal_domain(domain: str) -> bool:
-    lowered = domain.lower()
+    lowered = domain.lower().rstrip(".")
+    # Reverse-DNS lookups and single-label names (NetBIOS / LLMNR broadcasts)
+    # are local resolution, not internet destinations.
+    if lowered.endswith((".in-addr.arpa", ".ip6.arpa")) or "." not in lowered:
+        return True
     return any(lowered.endswith(suffix) or suffix in lowered for suffix in INTERNAL_DOMAIN_SUFFIXES)
 
 

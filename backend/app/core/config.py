@@ -40,6 +40,11 @@ class CorrelationSettings(BaseSettings):
     weight_suspicious_coincidence: float = 0.25
     # Fraction of the score contributed purely by temporal proximity.
     weight_time_proximity: float = 0.25
+    #: Up to this many notable events every candidate pair is scored (exact).
+    #: Above it, large datasets use bounded neighbour lists so memory stays linear.
+    exact_pair_limit: int = 1500
+    max_neighbors_per_key: int = 30
+    max_links_per_event: int = 10
 
 
 class LateralMovementSettings(BaseSettings):
@@ -153,6 +158,72 @@ class LiveSettings(BaseSettings):
     max_batch: int = 5_000
 
 
+class SyslogSettings(BaseSettings):
+    """Syslog receiver for Linux servers and network devices. Off by default."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_SYSLOG_", extra="ignore")
+
+    enabled: bool = False
+    #: 127.0.0.1 accepts only this computer; 0.0.0.0 accepts the network.
+    host: str = "127.0.0.1"
+    #: 5514 instead of 514 so no administrator rights are needed.
+    port: int = 5514
+    udp: bool = True
+    tcp: bool = True
+
+
+class ForwardSettings(BaseSettings):
+    """Send attack-chain alerts to a SIEM. Nothing is sent unless a target is set."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_FORWARD_", extra="ignore")
+
+    webhook_url: str = ""
+    splunk_hec_url: str = ""
+    splunk_hec_token: str = ""
+    #: host:port of a syslog collector; alerts are sent as CEF over UDP.
+    syslog_target: str = ""
+    min_risk_score: int = 0
+    timeout_seconds: float = 5.0
+    #: Set false only for a SIEM with a self-signed certificate (lab setups).
+    tls_verify: bool = True
+    #: "prism" (PRISM's alert JSON) or "ocsf" (an OCSF Detection Finding).
+    format: str = "prism"
+
+
+class AuthSettings(BaseSettings):
+    """Sign-in, user accounts, roles and the audit log (see app/core/auth.py)."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_AUTH_", extra="ignore")
+
+    enabled: bool = True
+    #: Fixed code; when empty one is generated and kept in token_file.
+    token: str = ""
+    token_file: Path = BACKEND_ROOT / "data" / ".prism_token"
+    #: The shared access code (launcher, scripts, collectors). It acts as an
+    #: admin; organisations that use named accounts only can switch it off.
+    access_code_enabled: bool = True
+    #: Users, sessions and the audit log. SQLite file path or postgresql:// URL.
+    db_url: str = str(BACKEND_ROOT / "data" / "security.db")
+    #: Sessions end this long after sign-in, whatever the activity.
+    session_hours: float = 12.0
+    #: Sign-in attempts allowed per account (and per address) in the window.
+    max_failed_logins: int = 5
+    lockout_minutes: int = 15
+    min_password_length: int = 12
+    cookie_max_age_seconds: int = 7 * 24 * 3600
+
+
+class StorageSettings(BaseSettings):
+    """Persistent storage of uploads, live events and investigations."""
+
+    model_config = SettingsConfigDict(env_prefix="PRISM_STORAGE_", extra="ignore")
+
+    enabled: bool = True
+    path: Path = BACKEND_ROOT / "data" / "prism.db"
+    #: Optional postgresql://user:password@host:5432/db; empty means the SQLite file above.
+    url: str = ""
+
+
 class Neo4jSettings(BaseSettings):
     """Optional persistent graph store. Disabled by default so the prototype
     runs with zero external services."""
@@ -177,6 +248,9 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "PRISM"
+    #: Edge / local-only mode (see app/core/local_only.py): data never leaves
+    #: this computer. On by default; only PRISM_LOCAL_ONLY=false turns it off.
+    local_only: bool = True
     version: str = "0.1.0"
     log_level: str = "INFO"
 
@@ -205,11 +279,11 @@ class Settings(BaseSettings):
                 BACKEND_ROOT / "data" / "demo",
                 BACKEND_ROOT / "data" / "inventory" / "topology.json",
             ),
-            # No bundled dataset: everything arrives through the live feed.
-            "live": (
-                None,
-                BACKEND_ROOT / "data" / "inventory" / "topology.json",
-            ),
+            # No bundled dataset and no inventory: everything comes from the live
+            # feed, so only computers and accounts actually seen appear. (The
+            # demo company's inventory would add its made-up hosts and users.)
+            # PRISM_INVENTORY_FILE can point at a real inventory for this site.
+            "live": (None, None),
         }
         if self.dataset not in presets:
             raise ValueError(
@@ -218,7 +292,7 @@ class Settings(BaseSettings):
         default_dir, default_inventory = presets[self.dataset]
         if self.demo_dir is None:
             self.demo_dir = default_dir
-        if self.inventory_file is None:
+        if self.inventory_file is None and default_inventory is not None:
             self.inventory_file = default_inventory
         return self
 
@@ -243,6 +317,10 @@ class Settings(BaseSettings):
     prediction: PredictionSettings = Field(default_factory=PredictionSettings)
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
     live: LiveSettings = Field(default_factory=LiveSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
+    syslog: SyslogSettings = Field(default_factory=SyslogSettings)
+    forward: ForwardSettings = Field(default_factory=ForwardSettings)
     agents: AgentSettings = Field(default_factory=AgentSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 

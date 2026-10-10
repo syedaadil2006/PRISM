@@ -455,6 +455,25 @@ def _parse_botsv1(record: LogRecord, ctx: ParseContext) -> NormalizedEvent:
 PARSERS["botsv1"] = _parse_botsv1
 
 
+def _parse_ecs(record: LogRecord, ctx: ParseContext) -> NormalizedEvent:
+    # Imported lazily for the same reason as the BOTS adapter.
+    from app.ingest.ecs import parse_ecs
+
+    return parse_ecs(record, ctx)
+
+
+PARSERS["ecs"] = _parse_ecs
+
+
+def _parse_ocsf(record: LogRecord, ctx: ParseContext) -> NormalizedEvent:
+    from app.ocsf import parse_ocsf
+
+    return parse_ocsf(record, ctx)
+
+
+PARSERS["ocsf"] = _parse_ocsf
+
+
 def detect_format(record: LogRecord) -> str:
     """Best-effort format sniffing so ingestion works without a format hint."""
     keys = {str(k).lower() for k in record}
@@ -464,6 +483,17 @@ def detect_format(record: LogRecord) -> str:
         return "botsv1"
     if record.get("dataset") == "botsv1" or {"sourcetype", "_time"} <= keys:
         return "botsv1"
+    # Open Cybersecurity Schema Framework: a class_uid plus a metadata object.
+    from app.ocsf import is_ocsf
+
+    if is_ocsf(record):
+        return "ocsf"
+    # Elastic Common Schema (Winlogbeat, Filebeat, Elastic Agent): nested
+    # objects such as "winlog" or "event" would otherwise confuse the checks below.
+    from app.ingest.ecs import is_ecs
+
+    if is_ecs(record):
+        return "ecs"
     if {"event_type", "action"} <= keys:
         return "prism"
     if keys & {"query", "qtype_name", "id.orig_h", "id_orig_h"}:

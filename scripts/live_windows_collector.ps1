@@ -22,13 +22,50 @@ param(
     [string]$Server = 'http://127.0.0.1:8000',
     [int]$IntervalSeconds = 3,
     # 0 = only events that happen after the collector starts.
-    [int]$LookBackMinutes = 0
+    [int]$LookBackMinutes = 0,
+    # PRISM's API access code; read from backend\data\.prism_token when omitted.
+    [string]$Token = '',
+    # Local-only by default: refuse to send this computer's events anywhere else.
+    [switch]$AllowRemote
 )
 
 $ErrorActionPreference = 'Stop'
 try { $Host.UI.RawUI.WindowTitle = 'PRISM live collector - close this window to stop' } catch { }
 $computer = $env:COMPUTERNAME.ToUpper()
 $endpoint = $Server.TrimEnd('/') + '/api/live/events'
+$serverHost = ([Uri]$Server).Host
+if (-not $AllowRemote -and $serverHost -notin @('127.0.0.1', 'localhost', '::1', '[::1]')) {
+    Write-Host "  Refusing to send events to $serverHost`: local-only mode keeps this computer's data on this computer." -ForegroundColor Red
+    Write-Host '  Add -AllowRemote only if sending them to another machine is intended.'
+    exit 1
+}
+if (-not $Token) { $Token = $env:PRISM_AUTH_TOKEN }
+if (-not $Token) {
+    $tokenFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'backend\data\.prism_token'
+    if (Test-Path $tokenFile) { $Token = (Get-Content $tokenFile -Raw).Trim() }
+}
+$authHeaders = @{}
+if ($Token) { $authHeaders['X-PRISM-Token'] = $Token }
+# PRISM on this computer may use a self-signed HTTPS certificate
+# (scripts\make-tls-cert.ps1). Accept it only for this computer's own address.
+if ($Server -like 'https://*' -and $serverHost -in @('127.0.0.1', 'localhost', '::1', '[::1]')) {
+    Add-Type -TypeDefinition @"
+using System.Net;
+using System.Net.Security;
+public static class PrismLocalTls {
+    public static void Install() {
+        ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, errors) => {
+            if (errors == SslPolicyErrors.None) return true;
+            var request = sender as HttpWebRequest;
+            if (request == null) return false;
+            var host = request.RequestUri.Host;
+            return host == "127.0.0.1" || host == "localhost" || host == "[::1]";
+        };
+    }
+}
+"@
+    [PrismLocalTls]::Install()
+}
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 
@@ -101,7 +138,7 @@ function Send-Records($records, $stream) {
     for ($i = 0; $i -lt $records.Count; $i += 1000) {
         $chunk = @($records[$i..([Math]::Min($i + 999, $records.Count - 1))])
         $body = ($chunk | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
-        $result = Invoke-RestMethod -Method Post -Uri $uri -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/x-ndjson'
+        $result = Invoke-RestMethod -Method Post -Uri $uri -Headers $authHeaders -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/x-ndjson'
         Write-Host ("  {0:HH:mm:ss}  {1,-28} sent {2,4}   accepted {3,4}" -f (Get-Date), $stream, $chunk.Count, $result.accepted)
     }
 }

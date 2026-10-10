@@ -44,11 +44,39 @@ class InvestigationService:
     def __init__(self, settings: Settings, soc: SocState) -> None:
         self.settings = settings
         self.soc = soc
-        self.provider: LLMProvider = get_provider(settings.llm)
+        llm = settings.llm
+        if settings.local_only and llm.provider != "none":
+            # Local-only mode: findings are never sent to an outside model API.
+            logger.warning("local-only mode: language model disabled", extra={"provider": llm.provider})
+            llm = llm.model_copy(update={"provider": "none"})
+        self.provider: LLMProvider = get_provider(llm)
         self._investigations: dict[str, Investigation] = {}
         self._order: list[str] = []
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
+        self._restore()
+
+    # ------------------------------------------------------- persistence ---
+
+    def _restore(self) -> None:
+        """Load investigations (and analyst decisions) kept from earlier runs."""
+        for data in self.soc.store.load_investigations(self.settings.agents.max_investigations):
+            try:
+                investigation = Investigation.model_validate_json(data)
+            except ValueError as exc:
+                logger.warning("skipping unreadable stored investigation", extra={"error": str(exc)})
+                continue
+            if investigation.status == "active":  # interrupted by a restart
+                investigation.status = "cancelled"
+            self._investigations[investigation.investigation_id] = investigation
+            self._order.append(investigation.investigation_id)
+
+    def _persist(self, investigation: Investigation) -> None:
+        self.soc.store.save_investigation(
+            investigation.investigation_id,
+            investigation.created_at.isoformat(),
+            investigation.model_dump_json(),
+        )
 
     # ------------------------------------------------------------- reads ---
 
@@ -169,12 +197,17 @@ class InvestigationService:
             )
         finally:
             self._tasks.pop(investigation.investigation_id, None)
+            self._persist(investigation)
 
     def _evict_if_needed(self) -> None:
         limit = self.settings.agents.max_investigations
+        evicted = False
         while len(self._order) > limit:
             oldest = self._order.pop(0)
             self._investigations.pop(oldest, None)
+            evicted = True
+        if evicted:
+            self.soc.store.delete_investigations(set(self._order))
 
     async def cancel(self, investigation_id: str) -> Investigation:
         investigation = self.require(investigation_id)
@@ -187,6 +220,7 @@ class InvestigationService:
                 pass
         if investigation.status == "active":
             investigation.status = "cancelled"
+        self._persist(investigation)
         return investigation
 
     async def shutdown(self) -> None:
@@ -199,6 +233,7 @@ class InvestigationService:
         async with self._lock:
             self._investigations.clear()
             self._order.clear()
+        self.soc.store.delete_investigations()
 
     # -------------------------------------------------- human in the loop ---
 
@@ -233,6 +268,7 @@ class InvestigationService:
             investigation.metrics.analyst_false_positives += 1
 
         investigation.summary = await build_summary(investigation, self.provider)
+        self._persist(investigation)
         logger.info(
             "analyst decision recorded",
             extra={

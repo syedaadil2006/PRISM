@@ -6,12 +6,15 @@ the chain list and the statistics can never disagree.
 
 from __future__ import annotations
 
+import re
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app.api.aggregates import build_host_views, build_mitre_matrix, build_user_views
 from app.api.deps import get_state
+from app.core.config import PROJECT_ROOT
 from app.models.analysis import (
     AttackChain,
     AttackChainDetail,
@@ -29,6 +32,16 @@ router = APIRouter(prefix="/api")
 StateDep = Annotated[SocState, Depends(get_state)]
 
 
+def _ui_build() -> str | None:
+    """The hashed bundle name in the built dashboard, e.g. index-Bf_91Y4d.js."""
+    try:
+        html = (PROJECT_ROOT / "frontend" / "dist" / "index.html").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"assets/(index-[^\"']+\.js)", html)
+    return match.group(1) if match else None
+
+
 @router.get("/health", response_model=HealthView, tags=["system"])
 def health(state: StateDep) -> HealthView:
     """Liveness plus a summary of what is currently loaded."""
@@ -40,6 +53,7 @@ def health(state: StateDep) -> HealthView:
         sources=state.sources,
         ingest_errors=state.ingest_errors[:20],
         computed_at=state.analysis.computed_at,
+        ui_build=_ui_build(),
     )
 
 

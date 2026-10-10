@@ -22,11 +22,20 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.agent_routes import router as agent_router
 from app.api.live_routes import router as live_router
+from app.api.auth_routes import router as auth_router
+from app.api.siem_routes import router as siem_router
+from app.api.ocsf_routes import router as ocsf_router
+from app.api.admin_routes import router as admin_router
+from app.core.auth import AuthMiddleware, SecurityHeadersMiddleware, resolve_token
+from app.core.db import is_postgres, postgres_host
+from app.core.local_only import LocalOnlyMiddleware, is_loopback
+from app.core.security_store import SecurityStore
 from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.logging_config import configure_logging, get_logger
 from app.services.investigation_service import InvestigationService
 from app.services.soc_state import SocState
+from app.services.syslog_receiver import SyslogReceiver
 
 DESCRIPTION = """
 PRISM correlates authentication, DNS and endpoint events into a single
@@ -68,15 +77,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await state.start_simulation(restart=True)
     state.start_live_loop()
 
+    if settings.local_only and settings.syslog.host not in {"127.0.0.1", "::1", "localhost"}:
+        logger.warning("local-only mode: syslog receiver pinned to 127.0.0.1", extra={"requested": settings.syslog.host})
+        settings.syslog.host = "127.0.0.1"
+    syslog = SyslogReceiver(state)
+    app.state.syslog = syslog
+    if settings.syslog.enabled:
+        try:
+            await syslog.start()
+        except OSError as exc:
+            logger.warning("syslog receiver could not start", extra={"error": str(exc)})
+
     try:
         yield
     finally:
+        await syslog.stop()
+        if getattr(app.state, "security", None) is not None:
+            app.state.security.close()
         await investigations.shutdown()
         state.shutdown()
 
 
+def _check_database_locations(settings) -> None:  # noqa: ANN001
+    """Local-only mode: a PostgreSQL database must be on this computer too."""
+    if not settings.local_only:
+        return
+    for name, url in (("PRISM_STORAGE_URL", settings.storage.url), ("PRISM_AUTH_DB_URL", settings.auth.db_url)):
+        if url and is_postgres(url) and not is_loopback(postgres_host(url)):
+            raise RuntimeError(
+                f"{name} points to another computer, but local-only mode keeps all data on this one. "
+                "Use a database on this computer, or set PRISM_LOCAL_ONLY=false."
+            )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
+    _check_database_locations(settings)
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
@@ -92,9 +128,26 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Sign-in, roles and auditing. Added after CORS so it runs first on requests.
+    app.state.auth_enabled = settings.auth.enabled
+    app.state.auth_token = resolve_token(settings.auth) if settings.auth.enabled else ""
+    app.state.auth_cookie_max_age = settings.auth.cookie_max_age_seconds
+    app.state.access_code_enabled = settings.auth.access_code_enabled
+    app.state.security = SecurityStore(settings.auth) if settings.auth.enabled else None
+    if settings.auth.enabled:
+        app.add_middleware(AuthMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+    # Added last so it runs first: other machines are refused before anything else.
+    if settings.local_only:
+        app.add_middleware(LocalOnlyMiddleware)
+
     app.include_router(router)
     app.include_router(agent_router)
     app.include_router(live_router)
+    app.include_router(auth_router)
+    app.include_router(admin_router)
+    app.include_router(siem_router)
+    app.include_router(ocsf_router)
 
     frontend_dist = PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.is_dir():
@@ -104,9 +157,13 @@ def create_app() -> FastAPI:
             name="assets",
         )
 
+        # The page shell is never cached, so a browser always picks up the
+        # dashboard that matches the running server (hashed assets still cache).
+        no_cache = {"Cache-Control": "no-cache"}
+
         @app.get("/", include_in_schema=False)
         def index() -> FileResponse:
-            return FileResponse(frontend_dist / "index.html")
+            return FileResponse(frontend_dist / "index.html", headers=no_cache)
 
         # response_model=None because this route returns a bare Response, which
         # FastAPI must not try to turn into a Pydantic response model.
@@ -118,7 +175,7 @@ def create_app() -> FastAPI:
             candidate = frontend_dist / path
             if candidate.is_file() and frontend_dist in candidate.resolve().parents:
                 return FileResponse(candidate)
-            return FileResponse(frontend_dist / "index.html")
+            return FileResponse(frontend_dist / "index.html", headers=no_cache)
 
     return app
 

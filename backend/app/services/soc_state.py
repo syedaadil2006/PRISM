@@ -30,6 +30,8 @@ from app.models.events import IngestSummary, NormalizedEvent
 from app.models.graph import GraphPayload
 from app.models.inventory import Inventory
 from app.services.live_feed import LiveFeed, LiveIngestResult, LiveStatus
+from app.services.forwarder import Forwarder
+from app.services.storage import Store
 
 logger = get_logger(__name__)
 
@@ -82,6 +84,8 @@ class SocState:
         self._lock = asyncio.Lock()
         self._neo4j = Neo4jGraphStore(settings.neo4j)
 
+        self.store = Store(settings.storage)
+        self.forwarder = Forwarder(settings.forward, settings.version, local_only=settings.local_only)
         self.live = LiveFeed(settings.live, live_only=settings.dataset == "live")
         self._live_task: asyncio.Task[None] | None = None
         self._dirty = False
@@ -92,7 +96,11 @@ class SocState:
 
     def bootstrap(self) -> None:
         """Load inventory, the demo dataset if enabled, and connect Neo4j."""
-        self.inventory = load_inventory(Path(self.settings.inventory_file))
+        self.inventory = (
+            load_inventory(Path(self.settings.inventory_file))
+            if self.settings.inventory_file is not None
+            else Inventory()
+        )
 
         if self.settings.neo4j.enabled:
             try:
@@ -114,7 +122,27 @@ class SocState:
                 extra={"events": len(self._all_events), "errors": len(errors)},
             )
 
+        self._restore_stored_events()
         self.recompute()
+
+    @property
+    def storage_scope(self) -> str:
+        """Stored events belong to one data choice, so modes never mix."""
+        return self.settings.dataset + (":live-only" if self.live.live_only else "")
+
+    def _restore_stored_events(self) -> None:
+        """Add back uploads and live events kept from earlier runs of this data choice."""
+        stored = self.store.load_events(self.settings.live.max_events, self.storage_scope)
+        if not stored:
+            return
+        known = {e.event_id for e in self._all_events}
+        fresh = [e for e in stored if e.event_id not in known]
+        if fresh:
+            self._all_events = normalize_all(self._all_events + fresh)
+            if not self._gating:
+                self._revealed = len(self._all_events)
+            self.sources = sorted({e.source_log for e in self._all_events})
+        logger.info("restored stored events", extra={"events": len(fresh)})
 
     def shutdown(self) -> None:
         if self._sim_task is not None and not self._sim_task.done():
@@ -122,6 +150,7 @@ class SocState:
         if self._live_task is not None and not self._live_task.done():
             self._live_task.cancel()
         self._neo4j.close()
+        self.store.close()
 
     # ------------------------------------------------------------- pipeline --
 
@@ -149,6 +178,8 @@ class SocState:
         )
         self._last_analysis_at = self.analysis.computed_at
         self._last_analysis_ms = round((time.perf_counter() - started) * 1000, 1)
+        # New or changed chains are pushed to any configured SIEM (background thread).
+        self.forwarder.notify(chains)
 
         if self._neo4j.enabled:
             try:
@@ -182,6 +213,7 @@ class SocState:
         async with self._lock:
             known = {e.event_id for e in self._all_events}
             fresh = [e for e in accepted if e.event_id not in known]
+            self.store.save_events(fresh, "upload", self.storage_scope)
             self._all_events = normalize_all(self._all_events + fresh)
             if not self._gating:
                 self._revealed = len(self._all_events)
@@ -207,6 +239,7 @@ class SocState:
             self._sim_state = "idle"
             self.ingest_errors = []
             self.sources = []
+            self.store.clear_events(self.storage_scope)
             self.live.live_only = self.settings.dataset == "live"
             self.bootstrap()
 
@@ -233,10 +266,12 @@ class SocState:
                     known.add(event.event_id)
                     fresh.append(event)
             if fresh:
+                self.store.save_events(fresh, "live", self.storage_scope)
                 merged = normalize_all(self._all_events + fresh)
                 overflow = len(merged) - max(1, self.settings.live.max_events)
                 if overflow > 0:
                     merged = merged[overflow:]  # drop the oldest
+                    self.store.trim_events(self.settings.live.max_events, self.storage_scope)
                 self._all_events = merged
                 if not self._gating:
                     self._revealed = len(self._all_events)
@@ -316,6 +351,7 @@ class SocState:
                 self.sources = []
                 self.ingest_errors = []
                 self.live.live_only = True
+                self.store.clear_events(self.storage_scope)
             self._revealed = len(self._all_events)
             self.recompute()
         return self.live_status()

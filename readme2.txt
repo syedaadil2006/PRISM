@@ -192,7 +192,7 @@ Two datasets are bundled; choose with PRISM_DATASET:
 Real-time feed: PRISM can also analyse events as they happen. Other tools
 can push events to it (POST /api/live/events), it watches the folder
 backend/data/live for new log lines, and scripts/live_windows_collector.ps1
-forwards this computer's own Windows events. "Start Live Demo.bat" streams
+forwards this computer's own Windows events. scripts\live_replay.py streams
 the demo attack in real time so you can watch the story build up. The top
 bar shows LIVE FEED while events arrive.
 
@@ -203,7 +203,17 @@ Easiest (Windows): double-click "Start PRISM.bat". It checks the computer
 (Windows version, memory, disk space) and what PRISM needs (Python, Node.js,
 packages). If something is missing it lists what it will install and asks
 for your permission first (answer Y or N). No admin rights are needed.
-Later launches take a few seconds.
+By default everything stays on this computer (local-only / edge mode):
+other computers cannot connect, and PRISM sends nothing out and uses no
+internet services while running. Optionally (PRISM_LOCAL_ONLY=false) it can
+also accept logs from other computers (network mode), from Elastic/Winlogbeat, Splunk (HEC) and syslog, and it can
+send its attack alerts to a SIEM (webhook, Splunk or CEF syslog). It also reads
+and writes OCSF, the open standard event format (attack chains become OCSF
+Detection Findings).
+Later launches take a few seconds. The website is protected by an access
+code that PRISM creates on first start; the launcher signs you in
+automatically. Uploads, live events and investigations are saved, so they
+are still there after a restart.
 It then asks which data to show: 1 = real-time data from this computer,
 2 = the real Splunk BOTS v1 attack recording, 3 = the demo scenario.
 After starting, it asks whether PRISM may read this computer's Windows

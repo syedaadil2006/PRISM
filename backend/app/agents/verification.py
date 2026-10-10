@@ -40,7 +40,13 @@ class VerificationAgent(Agent):
         investigation = workspace.investigation
         downgrade = workspace.settings.agents.verification_downgrade
 
-        records = workspace.call("search_events", limit=500)
+        # Fetch exactly the records the findings cite. Loading a fixed number of
+        # rows instead would miss evidence on large datasets and wrongly fail
+        # findings whose events exist.
+        cited_ids = sorted(
+            {eid for finding in investigation.findings for eid in self._cited_events(investigation, finding)}
+        )
+        records = workspace.call("search_events", event_ids=cited_ids, limit=max(1, len(cited_ids)))
         known_events = {row["event_id"]: row for row in records.rows}
         await workspace.step(
             "Loaded the record set for cross-checking",

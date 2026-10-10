@@ -83,6 +83,25 @@ async def start_live(
     return await state.go_live(clear=clear)
 
 
+@router.get("/integrations")
+def integrations(request: Request, state: StateDep) -> dict:
+    """Every way data gets in and out: live feed, HEC, syslog, alert forwarding, storage."""
+    syslog = getattr(request.app.state, "syslog", None)
+    return {
+        "live_feed": {"push_api": "/api/live/events", "watched_folder": str(state.settings.live.watch_dir)},
+        "splunk_hec": {"endpoint": "/services/collector/event", "health": "/services/collector/health"},
+        "syslog_receiver": syslog.status() if syslog else {"enabled": False},
+        "alert_forwarding": state.forwarder.status(),
+        "storage": state.store.describe(state.storage_scope),
+        "authentication": {"enabled": bool(getattr(request.app.state, "auth_enabled", False))},
+        "local_only": {
+            "enabled": state.settings.local_only,
+            "meaning": "requests from other machines are refused; no data is sent off this computer"
+            if state.settings.local_only else "off: network access and outside targets are allowed",
+        },
+    }
+
+
 @router.post("/flush", response_model=LiveStatus)
 async def flush_live(state: StateDep) -> LiveStatus:
     """Re-run the analysis now instead of waiting for the background loop."""

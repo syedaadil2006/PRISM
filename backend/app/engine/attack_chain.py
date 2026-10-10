@@ -277,6 +277,20 @@ def _root_cause(
     )
 
 
+def _shows_attack_behaviour(members: list[NormalizedEvent]) -> bool:
+    """True if the cluster holds more than routine sign-ins.
+
+    That is: an event a detection rule flagged as suspicious (malicious
+    attachment, encoded PowerShell, credential access, suspicious domain,
+    admin-share access, password guessing, ...), or a notable non-logon event
+    (process, file or DNS activity).
+    """
+    return any(
+        e.suspicious or (e.event_type is not EventType.AUTHENTICATION and e.is_notable)
+        for e in members
+    )
+
+
 def build_chains(
     events: list[NormalizedEvent],
     correlations: list[Correlation],
@@ -298,9 +312,16 @@ def build_chains(
     }
 
     chains: list[AttackChain] = []
-    for index, members in enumerate(_components(events, correlations), start=1):
+    index = 0
+    for members in _components(events, correlations):
         if len(members) < settings.correlation.min_chain_events:
             continue
+        # A cluster of logons alone is not an attack: someone using their own
+        # computer produces exactly that. A chain needs at least one piece of
+        # attack behaviour before any host is called compromised.
+        if not _shows_attack_behaviour(members):
+            continue
+        index += 1
 
         member_ids = {e.event_id for e in members}
         chain_links = [

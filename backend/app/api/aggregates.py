@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.engine.mitre import TACTIC_ORDER
+from app.ingest.loader import SERVICE_ACCOUNT_RE
 from app.models.analysis import AttackChain
 from app.models.events import Action, EventType, NormalizedEvent
 from app.models.inventory import Inventory
@@ -103,11 +104,13 @@ def build_user_views(
     for lower, name in sorted(names.items()):
         related = [e for e in events if e.user and e.user.lower() == lower]
         identity = inventory.user(name)
+        builtin = identity is None and bool(SERVICE_ACCOUNT_RE.match(name))
         views.append(
             UserView(
                 name=name,
                 display_name=identity.display_name if identity else None,
-                department=identity.department if identity else None,
+                # Windows' own accounts (DWM-*, UMFD-*, SYSTEM, ...) are not people.
+                department=identity.department if identity else ("Windows system account" if builtin else None),
                 privilege=identity.privilege if identity else 0.0,
                 is_privileged=identity.is_privileged if identity else False,
                 groups=list(identity.groups) if identity else [],

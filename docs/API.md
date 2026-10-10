@@ -377,6 +377,51 @@ over the findings that survive.
 ### `POST /api/agents/investigations/{id}/cancel`
 Stop an investigation that is still running.
 
+## OCSF
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/ocsf/events` | Analysed events as OCSF 1.3. `chain_id` limits to one attack chain; `format=ndjson` gives one event per line |
+| `GET` | `/api/ocsf/findings` | Attack chains as OCSF Detection Findings (class 2004) |
+| `GET` | `/api/ocsf/info` | Supported classes and endpoints |
+
+OCSF input needs no separate endpoint: events with a `class_uid` and `metadata` object are detected
+automatically by every ingestion path (classes 3002, 3003, 1007, 1001, 4003).
+
+## Sign-in
+
+Every `/api` request except `GET /api/health` and the endpoints below needs the access code, sent as
+`X-PRISM-Token: <code>`, `Authorization: Bearer <code>`, or the `prism_session` cookie. Without it
+the API answers `401` with `WWW-Authenticate: Bearer`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/auth/status` | `enabled`, `authenticated`, `user`, `role`, `kind` (`user` or `access-code`) |
+| `POST` | `/api/auth/login` | Body `{"username": "...", "password": "..."}` or `{"token": "<code>"}`; sets an HttpOnly, SameSite=Strict cookie (Secure over HTTPS). 401 if wrong, 429 after repeated failures |
+| `POST` | `/api/auth/logout` | Ends the session |
+| `POST` | `/api/auth/password` | Body `{"current_password", "new_password"}`; signs out your other sessions |
+
+Roles: `viewer` may read; `analyst` may also use every other `POST`; `admin` may also use `/api/admin/*`,
+`POST /api/logs/reset` and `POST /api/live/start`. A role that is too low gets `403`.
+
+## Admin (admin role)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/admin/users` | Accounts: `username`, `role`, `disabled`, `created_at`, `last_login` |
+| `POST` | `/api/admin/users` | Body `{"username", "password", "role"}` (201) |
+| `PATCH` | `/api/admin/users/{username}` | Body with any of `role`, `disabled`, `password` |
+| `DELETE` | `/api/admin/users/{username}` | Delete the account (204) |
+| `GET` | `/api/admin/audit` | Newest entries first; `limit`, `actor`, `action` filters |
+| `GET` | `/api/admin/audit/verify` | `{"ok", "entries", "first_broken", "reason"}` |
+
+## Splunk HEC (compatible)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/services/collector/event` | HEC events, back to back: `{"time": ..., "host": ..., "sourcetype": ..., "event": {...}}`. Auth: `Authorization: Splunk <access code>`. Replies with HEC codes: 0 Success, 2 Token is required (401), 4 Invalid token (403), 5 No data, 6 Invalid data format, 12 Event field is required. Plain-text events are counted as skipped. |
+| `GET` | `/services/collector/health` | `{"text": "HEC is healthy", "code": 17}` |
+
 ## Live feed
 
 Real-time ingestion. See "Real-time feed" in the README.
@@ -386,6 +431,7 @@ Real-time ingestion. See "Real-time feed" in the README.
 | `POST` | `/api/live/events?source=<name>&format=<fmt>` | Push records as they happen: one JSON object, a JSON array, `{"records": [...]}`, JSON-lines, or CSV (`Content-Type: text/csv`). `format` is optional (`windows_security`, `sysmon`, `zeek_dns`, `prism`, `botsv1`). At most 5,000 records per request (413 above that). Returns `received`, `accepted`, `duplicates`, `rejected`, `errors`, `total_events`. |
 | `GET` | `/api/live/status` | Events received per source, events per minute, whether events arrived in the last 30 s, and whether the analysis has caught up |
 | `POST` | `/api/live/start?clear=true` | Switch to live analysis; with `clear=true` the bundled dataset is dropped (`POST /api/logs/reset` restores it) |
+| `GET` | `/api/live/integrations` | Syslog receiver, alert forwarding, storage and authentication status |
 | `POST` | `/api/live/flush` | Re-run the analysis now instead of waiting for the background loop (about 1 s) |
 
 Event ids are prefixed with the source name (`edr-laptop:edr-0001`), so different senders never

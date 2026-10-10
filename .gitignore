@@ -32,3 +32,10 @@ backend/data/botsv1/raw/
 # Live feed folder contents (the README stays)
 backend/data/live/*
 !backend/data/live/README.md
+
+# Local state: database and API access code (never commit)
+backend/data/prism.db*
+backend/data/.prism_token
+# Accounts, sessions and audit log; HTTPS certificate and private key
+backend/data/security.db*
+backend/data/tls/

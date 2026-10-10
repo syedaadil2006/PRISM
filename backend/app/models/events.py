@@ -133,6 +133,10 @@ class NormalizedEvent(BaseModel):
     severity: Severity = Severity.LOW
     #: Set by the normalizer when the event matched a suspicious-behaviour rule.
     suspicious: bool = False
+    #: Set by normalization when the event is kept for the record but is too
+    #: routine to start or extend an attack chain (for example the privileged
+    #: logon Windows writes for every administrator session). Says why.
+    suppressed: str | None = None
     tags: list[str] = Field(default_factory=list)
 
     #: Provenance: which log file / feed this came from.
@@ -147,6 +151,8 @@ class NormalizedEvent(BaseModel):
 
     @property
     def is_notable(self) -> bool:
+        if self.suppressed:
+            return False
         return (
             self.suspicious
             or self.action in NOTABLE_ACTIONS

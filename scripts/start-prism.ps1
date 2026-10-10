@@ -2,7 +2,7 @@
 #
 # 1. Checks the computer: Windows version, 64-bit, processor, memory, free
 #    disk space and internet access.
-# 2. Checks what PRISM needs: Python 3.11+, Node.js 18+, the Python packages,
+# 2. Checks what PRISM needs: Python 3.11+, Node.js 20+, the Python packages,
 #    the dashboard packages and the built dashboard.
 # 3. If anything is missing, lists exactly what will be downloaded, from
 #    where, and where it will go, then ASKS before installing anything.
@@ -25,6 +25,8 @@
 #   PRISM_ASSUME_YES  set to 1 to answer "yes" to the install question
 #   PRISM_COLLECT     no | yes | admin  answers the real-time collection question
 #   PRISM_SOURCE      1 | 2 | 3 (live | bots | demo)  answers the data question
+#   PRISM_NETWORK     yes | no  answers the network-mode question (asked only
+#                     when PRISM_LOCAL_ONLY=false; local-only is the default)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -36,12 +38,39 @@ Set-Location $Root
 $PythonVersion = '3.12.10'
 $MinPython = [version]'3.11'
 $MaxPython = [version]'3.15'   # first version NOT yet supported (packages must have ready-made wheels)
-$MinNode = [version]'18.0'
+$MinNode = [version]'20.0'   # React Router 7 needs Node 20+
 $MinRamGB = 4
 $MinFreeGB = 2
 $Port = 8000
 if ($env:PRISM_PORT) { $Port = [int]$env:PRISM_PORT }
-$HealthUrl = "http://127.0.0.1:$Port/api/health"
+# HTTPS when a certificate is present (scripts\make-tls-cert.ps1, or your organisation's own).
+$TlsCert = if ($env:PRISM_TLS_CERT_FILE) { $env:PRISM_TLS_CERT_FILE } else { Join-Path $Root 'backend\data\tls\prism.crt' }
+$TlsKey = if ($env:PRISM_TLS_KEY_FILE) { $env:PRISM_TLS_KEY_FILE } else { Join-Path $Root 'backend\data\tls\prism.key' }
+$UseTls = (Test-Path $TlsCert) -and (Test-Path $TlsKey)
+$Scheme = if ($UseTls) { 'https' } else { 'http' }
+$HealthUrl = "${Scheme}://127.0.0.1:$Port/api/health"
+if ($UseTls) {
+    # Lets this launcher talk to PRISM on this computer even with a self-signed
+    # certificate. It applies only to 127.0.0.1/localhost; other certificates
+    # are still checked normally.
+    Add-Type -TypeDefinition @"
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public static class PrismLocalTls {
+    public static void Install() {
+        ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, errors) => {
+            if (errors == SslPolicyErrors.None) return true;
+            var request = sender as HttpWebRequest;
+            if (request == null) return false;
+            var host = request.RequestUri.Host;
+            return host == "127.0.0.1" || host == "localhost" || host == "[::1]";
+        };
+    }
+}
+"@
+    [PrismLocalTls]::Install()
+}
 
 function Title($text) { Write-Host ''; Write-Host $text -ForegroundColor Cyan; Write-Host ('-' * $text.Length) -ForegroundColor DarkCyan }
 function Row($label, $value, $state) {
@@ -66,7 +95,19 @@ function Test-PrismHealth {
     try { Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 2 | Out-Null; return $true } catch { return $false }
 }
 
-function Open-Browser { if (-not $env:PRISM_NO_BROWSER) { Start-Process "http://localhost:$Port" } }
+# Opens the dashboard already signed in: the access code travels in the URL
+# fragment, which the browser never sends to a server; the dashboard swaps it
+# for a session cookie and removes it from the address bar.
+function Open-Browser {
+    if ($env:PRISM_NO_BROWSER) { return }
+    $url = "${Scheme}://localhost:$Port/"
+    $tokenFile = Join-Path $Root 'backend\data\.prism_token'
+    if (Test-Path $tokenFile) {
+        $code = (Get-Content $tokenFile -Raw).Trim()
+        if ($code) { $url += '#token=' + [Uri]::EscapeDataString($code) }
+    }
+    Start-Process $url
+}
 
 function Get-CollectorProcess {
     Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
@@ -100,7 +141,7 @@ function Request-LiveCollection([int]$LookBackMinutes = 0, [string]$Without = 't
     }
 
     $collector = Join-Path $Root 'scripts\live_windows_collector.ps1'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -Server http://127.0.0.1:$Port -LookBackMinutes $LookBackMinutes"
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -Server ${Scheme}://127.0.0.1:$Port -LookBackMinutes $LookBackMinutes"
     if ($elevate) {
         try {
             Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Minimized
@@ -115,6 +156,29 @@ function Request-LiveCollection([int]$LookBackMinutes = 0, [string]$Without = 't
     Info 'The top bar of the dashboard shows LIVE FEED while events arrive.'
 }
 
+# Network mode: other computers may send logs (live API, Splunk HEC, syslog).
+# Off unless the user says yes; returns $true/$false.
+function Select-NetworkMode {
+    Write-Host ''
+    Write-Host 'Logs from other computers (network mode)' -ForegroundColor Cyan
+    Write-Host '----------------------------------------' -ForegroundColor DarkCyan
+    Info 'Normally only THIS computer can reach PRISM. In network mode, other computers'
+    Info 'on your network can send logs to it: the live API and Splunk HEC endpoint on'
+    Info "port $Port (both need PRISM's access code) and syslog on port 5514."
+    Info 'Windows Firewall may ask you to allow PRISM; syslog itself has no password,'
+    Info 'so only use network mode on a network you trust.'
+    Write-Host ''
+    if ($env:PRISM_NETWORK) { $answer = $env:PRISM_NETWORK; Info "Network mode? [Y/N] [N]: $answer (PRISM_NETWORK)" }
+    else { $answer = Read-Host '  Allow other computers on your network to send logs? [Y/N] [N]' }
+    return ($answer -match '^\s*(y|yes)\s*$')
+}
+
+function Get-LanAddresses {
+    @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet|VirtualBox|VMware' } |
+        Select-Object -ExpandProperty IPAddress)
+}
+
 # Which data PRISM analyses. Returns @{ Dataset; Label; LookBack; Without }.
 function Select-DataSource {
     Write-Host ''
@@ -125,7 +189,7 @@ function Select-DataSource {
     Info '   (A normal computer usually shows "all clear": no attack is expected.)'
     Info '2. Real recorded attack data: Splunk "Boss of the SOC" v1'
     Info '   19,672 real events from a ransomware investigation (public, CC0).'
-    Info '   Takes about 1-2 minutes to analyse and needs about 4 GB of memory.'
+    Info '   Ready in about 10-20 seconds.'
     Info '3. Demo scenario'
     Info '   The made-up HR-PC -> FINANCE-PC attack used in the presentation.'
     Write-Host ''
@@ -133,7 +197,6 @@ function Select-DataSource {
     else { $choice = Read-Host '  Choose 1, 2 or 3 [1]' }
     switch -regex ($choice.Trim().ToLower()) {
         '^(2|bots|botsv1)$' {
-            if ($script:ramGB -lt 6) { Info "Warning: this computer has $($script:ramGB) GB of memory; the BOTS data needs about 4 GB." }
             return @{ Dataset = 'botsv1'; Label = 'real recorded attack data (Splunk BOTS v1)'; LookBack = 0; Without = 'the BOTS v1 data only' }
         }
         '^(3|demo|synthetic)$' {
@@ -231,9 +294,17 @@ Write-Host '  From Alert Noise to One Attack Story' -ForegroundColor DarkGray
 Update-SessionPath
 
 if (Test-PrismHealth) {
-    Info "PRISM is already running on http://localhost:$Port"
+    Info "PRISM is already running on ${Scheme}://localhost:$Port"
     Info 'To switch data (real-time, BOTS or demo), close the minimised "PRISM server" window and start again.'
-    Request-LiveCollection
+    # Ask about collecting only if the running PRISM analyses real-time data.
+    $liveMode = $false
+    try {
+        $tokenFile = Join-Path $Root 'backend\data\.prism_token'
+        $headers = @{}
+        if (Test-Path $tokenFile) { $headers['X-PRISM-Token'] = (Get-Content $tokenFile -Raw).Trim() }
+        $liveMode = [bool](Invoke-RestMethod "${Scheme}://127.0.0.1:$Port/api/live/status" -Headers $headers -TimeoutSec 5).live_only
+    } catch { }
+    if ($liveMode) { Request-LiveCollection -LookBackMinutes 1440 -Without 'nothing until real-time events arrive' }
     Open-Browser
     exit 0
 }
@@ -283,9 +354,9 @@ else {
 }
 
 $nodeVersion = Get-NodeVersion
-if ($nodeVersion -and $nodeVersion -ge $MinNode) { Row 'Node.js 18+' "Node.js $nodeVersion" 'OK' }
+if ($nodeVersion -and $nodeVersion -ge $MinNode) { Row 'Node.js 20+' "Node.js $nodeVersion" 'OK' }
 else {
-    Row 'Node.js 18+' $(if ($nodeVersion) { "Node.js $nodeVersion is too old" } else { 'not found' }) 'NEED'
+    Row 'Node.js 20+' $(if ($nodeVersion) { "Node.js $nodeVersion is too old" } else { 'not found' }) 'NEED'
     [void]$plan.Add(@{ Key = 'node'; Download = $true; Text = 'Node.js LTS (about 30 MB) from nodejs.org, unpacked into the PRISM folder (.tools\node)' })
 }
 
@@ -417,10 +488,26 @@ if ($plan.Count -gt 0) {
 
 # --- Start PRISM --------------------------------------------------------------
 $source = Select-DataSource
+# Edge / local-only mode (the default): data never leaves this computer, so
+# network mode is not offered. Only PRISM_LOCAL_ONLY=false brings it back.
+$localOnly = $env:PRISM_LOCAL_ONLY -ne 'false'
+if ($localOnly) {
+    Write-Host ''
+    Write-Host 'Local-only mode' -ForegroundColor Cyan
+    Write-Host '---------------' -ForegroundColor DarkCyan
+    Info 'All data stays on this computer: PRISM only accepts connections from this'
+    Info 'computer, sends nothing out, and uses no internet services while running.'
+    $network = $false
+} else {
+    $network = Select-NetworkMode
+}
+$bindHost = if ($network) { '0.0.0.0' } else { '127.0.0.1' }
+$networkEnv = if ($network) { 'set PRISM_SYSLOG_ENABLED=true& set PRISM_SYSLOG_HOST=0.0.0.0& ' } else { '' }
 Write-Host ''
 Info "Starting PRISM with $($source.Label)..."
-if ($source.Dataset -eq 'botsv1') { Info 'Analysing 19,672 real events; this takes about 1-2 minutes.' }
-$serverCommand = "set PRISM_DATASET=$($source.Dataset)& title PRISM server - close this window to stop PRISM & `"$venvPython`" -m uvicorn app.main:app --app-dir backend --port $Port"
+if ($source.Dataset -eq 'botsv1') { Info 'Analysing 19,672 real events; this takes a few seconds.' }
+$serverCommand = "set PRISM_DATASET=$($source.Dataset)& $networkEnv" + "title PRISM server - close this window to stop PRISM & `"$venvPython`" -m uvicorn app.main:app --app-dir backend --host $bindHost --port $Port"
+if ($UseTls) { $serverCommand += " --ssl-certfile `"$TlsCert`" --ssl-keyfile `"$TlsKey`"" }
 Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', $serverCommand -WorkingDirectory $Root -WindowStyle Minimized
 
 $waitSeconds = if ($source.Dataset -eq 'botsv1') { 300 } else { 90 }
@@ -429,8 +516,26 @@ while (-not (Test-PrismHealth)) {
     if ((Get-Date) -gt $deadline) { throw "PRISM did not start within $waitSeconds seconds. Open the minimised `"PRISM server`" window to see the error." }
     Start-Sleep -Seconds 1
 }
-Write-Host "  PRISM is running on http://localhost:$Port" -ForegroundColor Green
+Write-Host "  PRISM is running on ${Scheme}://localhost:$Port" -ForegroundColor Green
+if ($UseTls) { Info 'HTTPS is on (certificate in backend\data\tls).' } else { Info 'Tip: scripts\make-tls-cert.ps1 turns on HTTPS.' }
 Info 'To stop PRISM, close the minimised "PRISM server" window.'
-Request-LiveCollection -LookBackMinutes $source.LookBack -Without $source.Without
+if ($network) {
+    $addresses = Get-LanAddresses
+    Write-Host ''
+    Write-Host '  Network mode is ON. Other computers can send logs to:' -ForegroundColor Yellow
+    foreach ($address in $addresses) {
+        Info "    Live API:   ${Scheme}://${address}:$Port/api/live/events   (header X-PRISM-Token)"
+        Info "    Splunk HEC: ${Scheme}://${address}:$Port/services/collector/event   (Authorization: Splunk <code>)"
+        Info "    Syslog:     ${address}:5514  (UDP or TCP)"
+    }
+    Info '  The access code is in backend\data\.prism_token on this computer.'
+    Info '  Windows collector on another PC:'
+    Info "    scripts\live_windows_collector.ps1 -Server ${Scheme}://$(@($addresses)[0]):$Port -Token <code>"
+}
+# Only choice 1 (real-time data from this computer) needs the collector and its
+# permissions. The demo and BOTS data are files that ship with PRISM.
+if ($source.Dataset -eq 'live') {
+    Request-LiveCollection -LookBackMinutes $source.LookBack -Without $source.Without
+}
 Open-Browser
 exit 0

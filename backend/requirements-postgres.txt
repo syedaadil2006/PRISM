@@ -1,0 +1,3 @@
+# Optional: PostgreSQL storage (PRISM_STORAGE_URL / PRISM_AUTH_DB_URL=postgresql://...).
+-r requirements.txt
+psycopg[binary]==3.2.3

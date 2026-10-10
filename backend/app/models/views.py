@@ -95,3 +95,6 @@ class HealthView(BaseModel):
     sources: list[str] = Field(default_factory=list)
     ingest_errors: list[str] = Field(default_factory=list)
     computed_at: datetime | None = None
+    #: Build id of the dashboard this server serves; an open tab running an
+    #: older build reloads itself (see frontend/src/App.tsx).
+    ui_build: str | None = None

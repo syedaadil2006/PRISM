@@ -121,14 +121,21 @@ Double-click **`Start PRISM.bat`**. The launcher (`scripts/start-prism.ps1`) run
 
 1. **Checks this computer**: Windows 10 or newer (64-bit), processor, memory (4 GB minimum), free disk space
    (2 GB minimum) and whether port 8000 is free.
-2. **Checks what PRISM needs**: Python 3.11 to 3.14, Node.js 18+, the backend packages, the dashboard packages and
+2. **Checks what PRISM needs**: Python 3.11 to 3.14, Node.js 20+, the backend packages, the dashboard packages and
    the dashboard build.
 3. **Asks before installing anything.** If something is missing it lists exactly what it will download, from
    where and where it will go, and waits for you to answer **Y**. Answering **N** installs nothing.
 4. **Asks which data to analyse:** **1** real-time data from this computer (its own Windows event logs:
    the last 24 hours, then new events live), **2** real recorded attack data (Splunk BOTS v1, 19,672 events,
-   about 1–2 minutes and ~4 GB of memory), or **3** the demo scenario. Enter picks 1.
-5. **Asks before collecting real-time data.** After PRISM starts, it asks whether it may read this
+   ready in about 10–20 seconds), or **3** the demo scenario. Enter picks 1. Only choice 1 asks for permission
+   to collect from this computer (and, separately, for administrator approval); the demo and BOTS data ship
+   with PRISM and need neither.
+5. **Signs you in automatically.** The API is protected by an access code that PRISM creates on first
+   start (`backend/data/.prism_token`, never committed); the launcher opens the dashboard already signed
+   in. Anyone else gets a sign-in screen.
+6. **Keeps everything on this computer** (local-only mode, the default). Network mode is only offered when
+   `PRISM_LOCAL_ONLY=false`.
+7. **Asks before collecting real-time data.** After PRISM starts, it asks whether it may read this
    computer's own Windows event logs as they happen (see [Real-time feed](#real-time-feed)). On **Y** it
    starts the read-only collector in a minimised window; logon and Sysmon events additionally need
    Windows' administrator approval (UAC), which you can refuse. On **N** nothing is collected.
@@ -136,7 +143,7 @@ Double-click **`Start PRISM.bat`**. The launcher (`scripts/start-prism.ps1`) run
 | Missing | What the launcher installs (with your permission) |
 |---|---|
 | Python 3.11 to 3.14 | Python 3.12 for your user account (alongside any other Python), via winget or python.org. A newer Python that the packages do not support yet is skipped rather than compiled from source |
-| Node.js 18+ | A portable Node.js LTS from nodejs.org, unpacked into `.tools/node` |
+| Node.js 20+ | A portable Node.js LTS from nodejs.org, unpacked into `.tools/node` |
 | Backend packages | Creates `.venv` and installs `backend/requirements.txt` from pypi.org |
 | Dashboard packages and build | `npm ci` from npmjs.org, then `npm run build` |
 
@@ -148,7 +155,7 @@ rebuilt. PRISM then runs on http://localhost:8000 in a minimised window; close t
 
 ### Manual setup
 
-Requires Python 3.11 to 3.14 and Node 18+.
+Requires Python 3.11 to 3.14 and Node 20+.
 
 ```bash
 python -m venv .venv
@@ -424,10 +431,10 @@ to a file, can feed it:
 | **Push API** | `POST /api/live/events?source=<name>` with one JSON record, a JSON array, `{"records": [...]}`, JSON-lines, or CSV (`Content-Type: text/csv`). Formats are auto-detected. |
 | **Watched folder** | Append lines to any `*.jsonl`, `*.ndjson`, `*.log` or `*.csv` file in `backend/data/live/`. New lines are picked up within about a second. |
 | **Windows collector** | Offered by `Start PRISM.bat` (it asks first), or run `scripts/live_windows_collector.ps1` directly. Forwards this computer's own new Security (4624, 4625, 4648, 4672, 5140), System (7045) and Sysmon (1, 10, 11, 22) events. Run it from an administrator PowerShell to include the Security and Sysmon logs. It only reads logs. |
-| **Live demo** | Double-click **`Start Live Demo.bat`** (PRISM must be running). It streams the demo attack in real time with current timestamps (`scripts/live_replay.py --speed 30`). |
+| **Live demo** | With PRISM running: `.venv\Scripts\python.exe scripts\live_replay.py`. It streams the demo attack in real time with current timestamps (`--speed 30` by default). |
 
 ```bash
-curl -X POST "http://localhost:8000/api/live/events?source=hr-pc-sysmon" -H "Content-Type: application/x-ndjson" --data-binary @events.jsonl
+curl -X POST "http://localhost:8000/api/live/events?source=hr-pc-sysmon" -H "X-PRISM-Token: <code from backend/data/.prism_token>" -H "Content-Type: application/x-ndjson" --data-binary @events.jsonl
 ```
 
 Each source keeps its own ids (prefixed with the source name), resent records are counted once,
@@ -444,7 +451,155 @@ events) are re-analysed less often; `PRISM_LIVE_MAX_EVENTS` (default 50,000) bou
 
 ---
 
+## Local-only (edge) mode
+
+**By default, all data stays on the computer PRISM runs on.** This is enforced in code
+(`backend/app/core/local_only.py`), not left to configuration:
+
+| Rule | What happens |
+|---|---|
+| Other machines cannot reach PRISM | Every request that does not come from this computer gets **403**, even if the server was started listening on the network |
+| Nothing is forwarded off the computer | Alert targets (webhook, Splunk HEC, CEF syslog) are only used if they are on this computer; others are blocked and listed in `GET /api/live/integrations` |
+| No outside AI service | The optional language model is never used; summaries are written by the built-in deterministic narrator |
+| Syslog stays local | The syslog receiver only listens on `127.0.0.1` |
+| No internet requests from the dashboard | No web fonts or other outside resources; Windows' own fonts are used |
+| Scripts stay local | The Windows collector, live replay and SIEM pull refuse to send to another machine unless given `-AllowRemote` / `--allow-remote` |
+
+`Start PRISM.bat` does not offer network mode in local-only mode. Verified on a running server deliberately
+listening on the whole network: requests through the network address were refused (403), outside alert
+targets were blocked, the summary was written by the deterministic narrator, and PRISM opened **no**
+outgoing connections. The only time PRISM uses the internet is first-time setup (downloading Python,
+Node.js and packages), and only after you agree.
+
+`PRISM_LOCAL_ONLY=false` turns these rules off (for example to receive logs from other computers).
+
+---
+
+## SIEM integration and live log sources
+
+PRISM plugs into an existing security stack in both directions.
+
+**In: more live log sources**
+
+| Source | How |
+|---|---|
+| **Winlogbeat, Filebeat, Packetbeat, Elastic Agent** (Elastic Common Schema) | Send their JSON to `POST /api/live/events`, or let the pull connector read it from Elasticsearch. Windows Security, System, Sysmon (including DNS event 22), Zeek DNS and generic ECS authentication events are understood. |
+| **Splunk HTTP Event Collector** | `POST /services/collector/event` with `Authorization: Splunk <access code>`. Speaks HEC's protocol and response codes, so Splunk forwarders, Cribl, Fluent Bit, Vector or Logstash can send to PRISM unchanged. |
+| **Syslog** (Linux servers, network devices) | `PRISM_SYSLOG_ENABLED=true` opens UDP/TCP port 5514. sshd logons (accepted, failed, invalid user) and sudo commands become events. Off by default. |
+| **Other computers** | In network mode (see below) the Windows collector runs on any PC: `scripts\live_windows_collector.ps1 -Server http://<PRISM-PC>:8000 -Token <code>`. |
+
+**In: pull from a SIEM** — `scripts/siem_pull.py` polls on a timer and forwards only new events:
+
+```bash
+python scripts/siem_pull.py splunk --url https://splunk:8089 --token <bearer token> --query "index=wineventlog OR index=sysmon"
+```
+
+```bash
+python scripts/siem_pull.py elastic --url https://elastic:9200 --api-key <key> --index "winlogbeat-*,filebeat-*"
+```
+
+**Out: alerts to a SIEM** — whenever an attack chain appears or changes, PRISM sends one alert to each
+configured target (background thread; nothing is sent unless a target is set):
+
+| Target | Setting |
+|---|---|
+| Webhook (SOAR, chat bridges, any JSON receiver) | `PRISM_FORWARD_WEBHOOK_URL` |
+| Splunk HEC (`sourcetype=prism:attack_chain`) | `PRISM_FORWARD_SPLUNK_HEC_URL`, `PRISM_FORWARD_SPLUNK_HEC_TOKEN` |
+| Syslog in CEF (QRadar, ArcSight, Microsoft Sentinel, …) | `PRISM_FORWARD_SYSLOG_TARGET=host:port` |
+
+Each alert carries the chain id, hosts, users, stage, MITRE techniques, lateral movements (labelled
+*inferred*) and the predicted next target (labelled *predicted*).
+
+**Network mode** (only with `PRISM_LOCAL_ONLY=false`). `Start PRISM.bat` then asks whether other computers may send logs. Only on **Y** does PRISM
+listen on the network (and syslog on port 5514); it then prints the addresses to use. Windows Firewall
+may ask for permission. `GET /api/live/integrations` shows what is enabled and what has been received
+and sent.
+
+Verified against **real Splunk 10.6 and Elasticsearch 8.17**, run locally in Docker and bound to this
+computer: the demo attack loaded into each (into Splunk through its own HEC) was pulled back by
+`siem_pull.py` and rebuilt into the same story; repeated polls fetched only new events; duplicates already
+in the SIEM were counted once; and PRISM's alerts arrived in Splunk (`sourcetype=prism:attack_chain`) and
+Elasticsearch. Splunk results whose `_raw` is JSON are forwarded as the original event.
+`PRISM_FORWARD_TLS_VERIFY=false` accepts a SIEM's self-signed certificate (lab use only).
+
+---
+
+## OCSF (Open Cybersecurity Schema Framework)
+
+PRISM's internal schema is its own `NormalizedEvent` (Pydantic models in `backend/app/models/`). On top of
+it, PRISM reads and writes **OCSF 1.3**, the open standard behind Amazon Security Lake and supported by
+major SIEM vendors (`backend/app/ocsf.py`):
+
+| PRISM | OCSF class |
+|---|---|
+| Logons, failed logons, RDP, network/SMB | Authentication (3002) |
+| Privileged logon (Windows 4672) | Authorize Session (3003), Assign Privileges |
+| Process launch / process access (e.g. lsass) | Process Activity (1007), Launch / Open |
+| File creation (e.g. a malicious attachment) | File System Activity (1001), Create |
+| DNS lookups | DNS Activity (4003), Query |
+| Attack chains | **Detection Finding (2004)** with MITRE ATT&CK techniques and related event uids |
+
+* **Export:** `GET /api/ocsf/events` (optionally `?chain_id=` and `?format=ndjson`) and `GET /api/ocsf/findings`.
+  `PRISM_FORWARD_FORMAT=ocsf` sends alerts as OCSF Detection Findings.
+* **Import:** OCSF events are detected automatically by the live API, Splunk HEC endpoint, file upload and the
+  watched folder. OCSF written by PRISM reads back exactly (PRISM details travel in OCSF's `unmapped`
+  extension); OCSF from other tools is translated into native records so PRISM's own detection rules apply.
+* **Verified:** the demo attack exported to OCSF and re-imported, both exactly and stripped to what another tool
+  would send, rebuilds the same story; all 19,672 BOTS v1 events export and re-import with 0 errors.
+
+---
+
+## Accounts, roles, audit log and HTTPS
+
+* **Named accounts with roles.** An admin creates accounts on the **Admin** page (or `POST /api/admin/users`):
+  * `viewer` reads everything;
+  * `analyst` can also run investigations, decide on findings and add data;
+  * `admin` can also manage accounts, read the audit log and clear data.
+
+  The shared access code still works for the launcher, scripts and collectors and acts as an admin. Once named
+  accounts exist it can be switched off with `PRISM_AUTH_ACCESS_CODE_ENABLED=false`.
+* **Passwords and sessions.**
+  * Passwords need at least 12 characters and are stored only as salted scrypt hashes.
+  * Sessions are random tokens, stored hashed, and end after 12 hours.
+  * Disabling an account, changing its role or changing its password signs it out everywhere.
+  * Five failed sign-ins lock the account and the address for 15 minutes.
+* **Audit log.** Sign-ins (including failures), account changes, every change made through the API and every
+  refused request are recorded with who, what, when and from where.
+  * Entries are hash-chained, so editing or deleting an earlier entry is detected by **Verify integrity**
+    (`GET /api/admin/audit/verify`).
+  * Removing the most recent entries is not detected. Stopping that needs write-once storage or a copy kept
+    on a separate system.
+* **HTTPS.** Run `scripts\make-tls-cert.ps1`, or copy your organisation's certificate to
+  `backend\data\tls\prism.crt` and `prism.key`. `Start PRISM.bat` then serves PRISM over HTTPS.
+  * Over HTTPS the session cookie is `Secure` and HSTS is sent.
+  * Browser hardening headers (Content-Security-Policy, X-Frame-Options, nosniff) are always sent.
+* **PostgreSQL (optional).** Storage and accounts use SQLite files by default. For larger deployments set
+  `PRISM_STORAGE_URL` and/or `PRISM_AUTH_DB_URL` to `postgresql://user:password@host:5432/prism` and run
+  `pip install -r backend/requirements-postgres.txt`. In local-only mode the database must be on the same
+  computer.
+
+---
+
 ## Configuration
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PRISM_LOCAL_ONLY` | `true` | Edge mode: refuse other machines, send nothing off this computer |
+| `PRISM_AUTH_ENABLED` | `true` | Require the access code on `/api` |
+| `PRISM_AUTH_TOKEN` | *(generated)* | Use a fixed code instead of `backend/data/.prism_token` |
+| `PRISM_STORAGE_ENABLED` | `true` | Keep uploads, live events and investigations in SQLite |
+| `PRISM_STORAGE_PATH` | `backend/data/prism.db` | Database file |
+| `PRISM_STORAGE_URL` | *(empty)* | `postgresql://...` to store data in PostgreSQL instead |
+| `PRISM_AUTH_DB_URL` | `backend/data/security.db` | Accounts, sessions and audit log (file or `postgresql://...`) |
+| `PRISM_AUTH_ACCESS_CODE_ENABLED` | `true` | `false` allows named accounts only |
+| `PRISM_AUTH_SESSION_HOURS` | `12` | Sessions end this long after sign-in |
+| `PRISM_AUTH_MAX_FAILED_LOGINS` / `_LOCKOUT_MINUTES` | `5` / `15` | Sign-in lockout |
+| `PRISM_TLS_CERT_FILE` / `PRISM_TLS_KEY_FILE` | `backend/data/tls/prism.crt` / `.key` | HTTPS certificate used by the launcher |
+| `PRISM_SYSLOG_ENABLED` / `_HOST` / `_PORT` | `false` / `127.0.0.1` / `5514` | Syslog receiver |
+| `PRISM_FORWARD_WEBHOOK_URL` | *(empty)* | Send attack-chain alerts to a webhook |
+| `PRISM_FORWARD_SPLUNK_HEC_URL` / `_TOKEN` | *(empty)* | Send alerts to Splunk HEC |
+| `PRISM_FORWARD_SYSLOG_TARGET` | *(empty)* | Send alerts as CEF over syslog (`host:port`) |
+| `PRISM_FORWARD_FORMAT` | `prism` | `ocsf` sends alerts as OCSF Detection Findings |
 
 Every threshold and weight is environment-overridable — see
 [.env.example](.env.example). Nothing is hardcoded in the detection logic, and
