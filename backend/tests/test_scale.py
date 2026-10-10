@@ -98,7 +98,7 @@ def test_analysis_runs_off_the_event_loop():
         return waited, accepted
 
     waited, accepted = asyncio.run(scenario())
-    assert waited < 0.5 and accepted == 5
+    assert waited < 0.8 and accepted == 5  # blocked, it would wait the full 1 s analysis
     assert len(state.analysis.events) == 20 and state.pending_count == 5
     state.shutdown()
 

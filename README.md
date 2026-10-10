@@ -620,6 +620,25 @@ major SIEM vendors (`backend/app/ocsf.py`):
 
 ---
 
+## Tested on real red-team data: APT29 (MITRE ATT&CK Evaluations round 2)
+
+`scripts/benchmark_apt29.py` runs PRISM on the public OTRF recording of MITRE's APT29 emulation: 4 Windows
+computers over 2 days, with real credential theft and lateral movement.
+
+* **Reading the data:** 3,068 of 3,069 day-1 records and all 7,392 day-2 records were read. The one rejected
+  record has no timestamp.
+* **Day 1 (detection):** PRISM reconstructs the intrusion from SCRANTON to NASHUA, including the lateral
+  movement.
+* **Next-target prediction:** at each of the attacker's 3 real moves, PRISM saw only the events before the
+  move. It ranked the actual target first once (the domain controller) and in its top 3 every time. With 4
+  computers, top-3 is guaranteed, and top-1 at 1 of 3 is no better than chance.
+* **Known gaps it exposed (not tuned away):**
+  * Without account permissions in the network map, PRISM leans towards the domain controller.
+  * On day 2 the attacker switched to another stolen account, and PRISM's single-account lateral-movement
+    rule did not link that move.
+
+---
+
 ## Detection: Sigma rules, threat intel, behaviour baselines, analyst feedback
 
 Everything below runs on this computer, while events are normalized, on top of PRISM's own rules.

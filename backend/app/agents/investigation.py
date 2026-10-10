@@ -14,6 +14,8 @@ that always runs the same seven queries is a report generator.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from app.agents.base import Agent, AgentWorkspace
 from app.agents.state import AgentName, EvidenceKind, Investigation
 from app.models.analysis import Assurance
@@ -69,16 +71,14 @@ class InvestigationAgent(Agent):
         has_delivery = "MALICIOUS_ATTACHMENT" in actions
         has_credentials = "CREDENTIAL_ACCESS" in actions
 
+        # The hypothesis names only what the endpoint evidence shows; whether
+        # the intrusion moved on is the open question the next steps test.
         if has_delivery and has_execution:
-            hypothesis = (
-                "A document delivered to {} executed a payload, which then went "
-                "after credentials and moved to another host."
-            ).format(host)
+            hypothesis = "A document delivered to {} executed a payload{}.".format(
+                host, ", which then went after credentials" if has_credentials else ""
+            )
         elif has_credentials:
-            hypothesis = (
-                "Code running on {} went after credential material in order to "
-                "move elsewhere."
-            ).format(host)
+            hypothesis = "Code running on {} went after credential material.".format(host)
         else:
             hypothesis = "Suspicious execution on {} with no clear delivery route.".format(host)
 
@@ -99,18 +99,27 @@ class InvestigationAgent(Agent):
             evidence_ids.append(access_evidence)
 
             auth = workspace.call("search_auth_logs", user=account, limit=60)
-            failures = [r for r in auth.rows if r["outcome"] == "failure"]
+            # Only the account's activity around this incident counts as evidence
+            # for it: from one correlation window before the chain to one after.
+            chain = workspace.registry.context.chain(investigation.attack_chain_id)
+            in_window = auth.rows
+            if chain is not None:
+                margin = timedelta(seconds=workspace.settings.correlation.window_seconds)
+                start, end = chain.start_time - margin, chain.last_seen + margin
+                in_window = [r for r in auth.rows if start <= datetime.fromisoformat(r["timestamp"]) <= end]
+            failures = [r for r in in_window if r["outcome"] == "failure"]
             successes = [
                 r
-                for r in auth.rows
+                for r in in_window
                 if r["outcome"] != "failure"
                 and r["destination_host"]
                 and r["destination_host"] != r["source_host"]
             ]
             auth_evidence = workspace.evidence(
-                "{} authentication event(s) for {}: {} remote success(es), {} failure(s)".format(
-                    len(auth.rows), account, len(successes), len(failures)
+                "{} authentication event(s) for {} around the incident: {} remote success(es), {} failure(s)".format(
+                    len(in_window), account, len(successes), len(failures)
                 ),
+                event_ids=[r["event_id"] for r in in_window],
                 detail="; ".join(
                     "{} {} -> {}".format(r["action"], r["source_host"], r["destination_host"])
                     for r in successes[:5]
@@ -173,14 +182,23 @@ class InvestigationAgent(Agent):
             destinations = []
 
         # --- step 6: confirm or drop the hypothesis ------------------------
-        confirmed = has_execution and (bool(destinations) or bool(successes))
-        if confirmed:
+        # Movement is only claimed when a lateral-movement detection supports
+        # it; a remote sign-in by the same account is reported, not promoted.
+        remote_hosts = sorted({r["destination_host"] for r in successes})
+        if has_execution and destinations:
             statement = (
                 "{} The hypothesis holds: execution on {} is followed by "
                 "authenticated access to {}, under the same account."
-            ).format(hypothesis, host, ", ".join(destinations) or "another host")
+            ).format(hypothesis, host, ", ".join(destinations))
             confidence = 0.88 if has_credentials else 0.74
             title = "Attack hypothesis confirmed"
+        elif has_execution and remote_hosts:
+            statement = (
+                "{} The account also signed in to {}, but no lateral-movement "
+                "detection supports movement there, so the spread is unconfirmed."
+            ).format(hypothesis, ", ".join(remote_hosts[:5]))
+            confidence = 0.6
+            title = "Attack hypothesis partially supported"
         elif has_execution:
             statement = (
                 "{} Execution is present but nothing carried it to another host, "

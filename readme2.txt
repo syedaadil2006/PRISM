@@ -238,7 +238,7 @@ Access code (Access code tab): Start PRISM.bat signs you in automatically;
   running PRISM. Each installation gets its own random code.
 
 Real BOTS data instead:   set PRISM_DATASET=botsv1 before starting.
-Tests (207; 2 need PostgreSQL):       .venv/Scripts/python.exe -m pytest backend/tests -c backend/pytest.ini --rootdir backend
+Tests (209; 2 need PostgreSQL):       .venv/Scripts/python.exe -m pytest backend/tests -c backend/pytest.ini --rootdir backend
 Docker:                   docker compose up -d --build   (then http://localhost:8000)
 
 

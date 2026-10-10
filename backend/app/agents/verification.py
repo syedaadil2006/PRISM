@@ -66,9 +66,22 @@ class VerificationAgent(Agent):
             ok = True
 
             cited = self._cited_events(investigation, finding)
-            if not cited:
-                notes.append("Cites no source event.")
+            nodes = self._cited_nodes(investigation, finding)
+            if nodes:
+                # Topology and inventory facts are checked against the graph itself.
+                graph = workspace.registry.context.graph
+                missing = sorted(n for n in nodes if n not in graph)
+                if missing:
+                    notes.append("{} cited graph node(s) do not exist: {}".format(
+                        len(missing), ", ".join(missing[:4])))
+                    ok = False
+                else:
+                    notes.append("All {} cited graph node(s) exist in the environment graph.".format(len(nodes)))
+            if not cited and not nodes:
+                notes.append("Cites no source event or graph fact.")
                 ok = False
+            elif not cited:
+                pass
             else:
                 unresolved = [eid for eid in cited if eid not in known_events]
                 if unresolved:
@@ -156,6 +169,15 @@ class VerificationAgent(Agent):
         return "{}/{} verified, confidence {:.0%}".format(
             passed, total, investigation.confidence
         )
+
+    @staticmethod
+    def _cited_nodes(investigation: Investigation, finding: Finding) -> set[str]:
+        cited: set[str] = set()
+        for evidence_id in finding.evidence_ids:
+            item = investigation.evidence_item(evidence_id)
+            if item is not None:
+                cited.update(item.node_ids)
+        return cited
 
     @staticmethod
     def _cited_events(investigation: Investigation, finding: Finding) -> set[str]:
