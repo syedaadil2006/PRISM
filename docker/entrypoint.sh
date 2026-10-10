@@ -4,7 +4,7 @@
 # HTTPS is used when /data/tls/prism.crt and prism.key exist.
 set -e
 cd /app
-set -- python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --proxy-headers=false
+set -- python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --no-proxy-headers
 if [ -f /data/tls/prism.crt ] && [ -f /data/tls/prism.key ]; then
     set -- "$@" --ssl-certfile /data/tls/prism.crt --ssl-keyfile /data/tls/prism.key
 fi

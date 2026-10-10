@@ -22,7 +22,7 @@ services:
     container_name: prism
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${PRISM_PORT:-8000}:8000"
     environment:
       PRISM_DATASET: ${PRISM_DATASET:-synthetic}   # synthetic (demo), botsv1, or live
       PRISM_LOCAL_NETWORKS: '["172.16.0.0/12", "192.168.65.0/24"]'
@@ -47,7 +47,8 @@ services:
     image: neo4j:5.26-community
     profiles: ["neo4j"]
     environment:
-      NEO4J_AUTH: neo4j/${PRISM_NEO4J_PASSWORD:?set PRISM_NEO4J_PASSWORD to use Neo4j}
+      # No default password: Neo4j refuses to start until PRISM_NEO4J_PASSWORD (8+ characters) is set.
+      NEO4J_AUTH: neo4j/${PRISM_NEO4J_PASSWORD:-}
       NEO4J_server_memory_heap_max__size: 1G
     ports:
       - "127.0.0.1:7474:7474"

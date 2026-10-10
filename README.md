@@ -207,8 +207,7 @@ docker compose exec prism cat /data/.prism_token
 ```
 
 Then open http://localhost:8000 and sign in as `Admin` / `Admin@123` (you will be asked to choose a new password).
-The Docker files are new in this version and have not been build-tested yet; the one-click launcher is the
-tested way to run PRISM.
+Use another port with `PRISM_PORT=8010 docker compose up -d`.
 * One container serves the API and the dashboard. It runs as an unprivileged user with a read-only file
   system, and the port is published on 127.0.0.1 only.
 * Databases, the access code, backups and an optional HTTPS certificate live in the `prism-data` volume. Put
